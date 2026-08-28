@@ -9,7 +9,7 @@
 3. **Model 3：Multi-Agent 投資決策討論**
 
 最後由 
-un_all_models_app_v2_2.py 串接三個 Model，提供 App 使用。
+run_all_models_app_v2_2.py 串接三個 Model，提供 App 使用。
 
 ---
 
