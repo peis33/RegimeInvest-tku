@@ -6,3 +6,4 @@ hmmlearn
 tensorflow
 tejapi
 requests
+python-dotenv

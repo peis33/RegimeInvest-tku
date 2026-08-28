@@ -43,7 +43,9 @@ import tensorflow as tf
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras import backend as K
+from dotenv import load_dotenv
 
+load_dotenv()
 # IMPORTANT:
 # 直接共用已通過正式 V4 實驗的核心，不重寫另一套 HMM。
 import hmm_mta_lstm_sliding_window_experiment as base
