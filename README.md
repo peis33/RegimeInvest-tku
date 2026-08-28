@@ -8,7 +8,8 @@
 2. **Model 2：股票篩選 + Zipf + Genetic Algorithm (GA) 資金配置**
 3. **Model 3：Multi-Agent 投資決策討論**
 
-最後由 un_all_models_app_v2_2.py 串接三個 Model，提供 App 使用。
+最後由 
+un_all_models_app_v2_2.py 串接三個 Model，提供 App 使用。
 
 ---
 
@@ -400,14 +401,11 @@ Model 1 的 Sliding Window / Strict Rolling 實驗：
 
 禁止上傳：
 
-- .env
-- 真實 TEJ API Key
 - Password / Credential
 - __pycache__
 - .pyc
 - 個人 Token
 
-如果發現 API Key 曾經被公開，應立即重新產生新的 Key。
 
 ---
 
@@ -445,6 +443,163 @@ Model 1 的 Sliding Window / Strict Rolling 實驗：
     run_all_models_app_v2_2.py
 
 以及各 Model 產生的 Output CSV / JSON。
+
+---
+
+# App 串接說明
+
+## 1. 執行完整模型
+
+App 後端執行：
+
+python run_all_models_app_v2_2.py
+
+完整流程：
+
+Model 1 → Model 2 Candidate Selection → Model 2 Portfolio Allocation → Model 3 Multi-Agent
+
+請勿修改 Model 1、Model 2、Model 3 的演算法內容。
+
+---
+
+## 2. App 輸入
+
+使用者設定檔：
+
+user_profile.json
+
+主要欄位：
+
+- investor_type
+- risk_preference
+- budget
+- allow_fractional
+
+App 若讓使用者修改投資人設定，將資料寫入 user_profile.json 後，再執行完整 pipeline。
+
+---
+
+## 3. App 需要讀取的輸出
+
+### Model 1：市場狀態
+
+檔案：
+
+model_1_prediction_output.csv
+
+App 主要使用：
+
+- predicted_regime
+- prob_Bear
+- prob_Bull
+- prob_Sideways
+- expected_regime_duration_steps
+- mta_to_bear_steps
+
+用途：
+
+顯示目前預測市場狀態、各狀態機率、預估狀態持續時間，以及 MTA to Bear(量化距離風險市場狀態 Bear 還有多遠)。
+
+---
+
+### Model 2：投資組合
+
+檔案：
+
+portfolio_allocation_output.csv
+
+App 主要使用：
+
+- stock_id
+- name
+- asset_type
+- price
+- final_weight
+- final_weight_percent
+- allocated_amount
+- shares
+- expected_return
+- risk
+
+用途：
+
+顯示最終股票配置、現金配置、投資金額與權重。
+
+Model 2 / Zipf + GA 的數值配置為正式投資組合。
+
+---
+
+### Model 3：Multi-Agent 討論
+
+檔案：
+
+model_3_v5_1_discussion_output.json
+
+App 應呈現完整討論流程：
+
+Risk-Seeking R1
+↓
+Risk-Averse R1
+↓
+Risk-Seeking R2
+↓
+Risk-Averse R2
+↓
+Judge
+
+建議呈現：
+
+- Agent 立場
+- 偏好部位
+- 優先控制部位
+- 各資產提高 / 降低 / 維持
+- Evidence
+- Claim
+- 第二輪接受 / 反駁內容
+- Judge 最終判斷
+
+注意：
+
+Model 3 是 Decision Support / Risk Review Layer。
+
+Model 3 不重新最佳化 Model 2 的數值權重。
+實際投資權重仍使用 portfolio_allocation_output.csv。
+
+---
+
+## 4. App 串接流程
+
+使用者輸入
+↓
+user_profile.json
+↓
+python run_all_models_app_v2_2.py
+↓
+Model 1
+↓
+Model 2
+↓
+Model 3
+↓
+讀取：
+
+1. model_1_prediction_output.csv
+2. portfolio_allocation_output.csv
+3. model_3_v5_1_discussion_output.json
+↓
+顯示於 App
+
+---
+
+## 5. 模型端目前狀態
+
+已使用全新 GitHub clone 測試完整 pipeline。
+
+Model 1：PASS
+Model 2 Candidate Selection：PASS
+Model 2 V2 Strong Allocation：PASS
+Model 3 V5.1 Multi-Agent：PASS
+End-to-End Pipeline：PASS
 
 ---
 
