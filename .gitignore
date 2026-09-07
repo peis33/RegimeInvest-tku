@@ -39,3 +39,24 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Python backend
+backend/.venv312/
+**/__pycache__/
+*.py[cod]
+**/.env
+
+# RegimeInvest generated outputs
+backend/regime_invest/model_1_prediction_output.csv
+backend/regime_invest/model_1_production_metadata.csv
+backend/regime_invest/model_2_candidate_stocks.csv
+backend/regime_invest/portfolio_allocation_output.csv
+backend/regime_invest/model_2_v2_strong_final_portfolio_audit.csv
+backend/regime_invest/model_3_v5_1_final_output.csv
+backend/regime_invest/model_3_v5_1_discussion_output.json
+backend/regime_invest/model_3_v5_1_production_report.txt
+backend/regime_invest/model_3_v5_1_production_audit.csv
+backend/regime_invest/end_to_end_app_pipeline_audit.csv
+backend/regime_invest/end_to_end_app_pipeline_report.txt
+backend/regime_invest/experiment_model_2_candidate_selection_audit.csv
+backend/regime_invest/experiment_model_2_candidate_selection_summary.csv
