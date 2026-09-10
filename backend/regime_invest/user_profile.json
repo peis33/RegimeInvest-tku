@@ -1,0 +1,9 @@
+{
+  "budget": 50000,
+  "investor_type": "large",
+  "risk_preference": "neutral",
+  "allow_fractional": true,
+  "preferred_stock_class": "auto",
+  "top_n": 5,
+  "zipf_s": 1.2
+}

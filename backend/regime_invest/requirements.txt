@@ -1,0 +1,10 @@
+﻿numpy
+pandas
+scipy
+scikit-learn
+hmmlearn
+tensorflow
+tejapi
+requests
+python-dotenv
+ollama
