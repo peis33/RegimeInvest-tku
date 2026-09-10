@@ -9,7 +9,7 @@ import { View, StyleSheet } from 'react-native';
 
 import Home from './src/app/Home';
 import Analyze from './src/app/Analyze';
-import Profile from './src/app/Profile';
+import Setting from './src/app/Setting';
 import Compare from './src/app/Compare';
 import Login from './src/app/Login';
 import TabBar, { TAB_BAR_STYLE } from './src/components/TabBar';
@@ -44,6 +44,7 @@ export default function App() {
     <SafeAreaProvider style={styles.appRoot}>
       <ViewportProvider style={styles.appRoot}>
         <AppSettingsProvider
+          initialAllowFractional={loginPreferences?.allowFractional ?? true}
           investmentResult={investmentResult}
           investmentRunPending={investmentRunPending}
           investmentRunError={investmentRunError}
@@ -137,7 +138,7 @@ export default function App() {
                 />
                 <Tab.Screen
                   name="Setting"
-                  component={Profile}
+                  component={Setting}
                   initialParams={{
                     initialUserIdentity: loginPreferences?.investorType || '',
                   }}

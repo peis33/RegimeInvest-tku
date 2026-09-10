@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Animated,
-  Modal,
-  PanResponder,
+  Image,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,48 +9,38 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import AssetSvg from '../components/AssetSvg';
+import TriggerRulesSection from '../components/TriggerRulesSection';
 import { TAB_BAR_STYLE } from '../components/TabBar';
+import CustomGroupName from './CustomGroupName';
+import { useAppSettings } from '../context/AppSettingsContext';
 import useViewportDimensions from '../hooks/useViewportDimensions';
+import { updateAllowFractional } from '../services/investmentApi';
 
 const DROPDOWN_ARROW_IMAGE = require('../assets/image/DropdownArrow.svg');
-const COMPANY_OPTIONS = [
-  '台積電',
-  '聯發科',
-  '聯詠',
-  '台達電',
-  '廣達',
-  '富邦金',
-  '聯電',
-  '鴻海',
-  '中華電',
-  '國泰金',
-  '兆豐金',
-  '中信金',
-  '中鋼',
-  '長榮',
-  '台塑',
-  '第一金',
-];
+const PROFILE_PHOTO_IMAGE = require('../assets/image/ProfilePhoto.svg');
+const NAME_IMAGE = require('../assets/image/name.svg');
 
-function Toggle({ value, onPress, scale = 1, disabled = false }) {
-  const width = 61 * scale;
-  const height = 25 * scale;
-  const thumbSize = 23 * scale;
+function Toggle({ value, onPress, scale, accessibilityLabel = '設定開關', disabled = false }) {
+  const width = 63 * scale;
+  const height = 23 * scale;
+  const thumbSize = 21 * scale;
 
   return (
     <Pressable
       accessibilityRole="switch"
       accessibilityState={{ checked: value }}
-      accessibilityLabel="觸價警示"
+      accessibilityLabel={accessibilityLabel}
       onPress={onPress}
       disabled={disabled}
       style={[
         styles.toggle,
         { width, height, borderRadius: height / 2 },
         value ? styles.toggleOn : styles.toggleOff,
+        disabled ? styles.toggleDisabled : null,
       ]}
     >
       <View
@@ -62,424 +51,101 @@ function Toggle({ value, onPress, scale = 1, disabled = false }) {
             height: thumbSize,
             borderRadius: thumbSize / 2,
           },
-          value
-            ? [styles.thumbLeft, { marginLeft: scale }]
-            : [styles.thumbRight, { marginRight: scale }],
+          value ? { marginLeft: scale } : { alignSelf: 'flex-end', marginRight: scale },
         ]}
       />
     </Pressable>
   );
 }
 
-function NumericField({
-  value,
-  onChangeText,
-  width = 88,
-  scale = 1,
-  radius = 50,
-  containerStyle,
-  editable = true,
-}) {
-  const height = 26 * scale;
-
+function ProfileDropdown({ scale, value, onPress }) {
   return (
-    <View style={[styles.inputFrame, { width, height, borderRadius: radius }, containerStyle]}> 
-      <TextInput
-        value={value}
-        onChangeText={onChangeText}
-        editable={editable}
-        keyboardType="numeric"
-        style={[
-          styles.input,
-          {
-            width: '100%',
-            height: '100%',
-            fontSize: 16 * scale,
-            lineHeight: 22 * scale,
-            borderRadius: radius,
-          },
-        ]}
-        textAlign="center"
-        maxLength={8}
-      />
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="選擇項目"
+      onPress={onPress}
+      style={[styles.profileDropdown, { width: 168 * scale, height: 28 * scale, borderRadius: 50 * scale }]}
+    >
       <View
         pointerEvents="none"
-        style={[styles.inputInnerBorder, { borderRadius: Math.max(0, radius - 1) }]}
+        style={[styles.profileDropdownBorder, { borderRadius: 49 * scale }]}
       />
-    </View>
-  );
-}
-
-function CompanyMenu({ anchor, menuWidth, uiScale, screenHeight, ruleId, onSelectCompany }) {
-  const menuPadding = 14 * uiScale;
-  const optionHeight = 28 * uiScale;
-  const optionGap = 10 * uiScale;
-  const fullMenuHeight =
-    menuPadding * 2 +
-    COMPANY_OPTIONS.length * optionHeight +
-    (COMPANY_OPTIONS.length - 1) * optionGap;
-  const screenMargin = 12 * uiScale;
-  const availableBelow = screenHeight - (anchor.y + anchor.height) - screenMargin;
-  const availableAbove = anchor.y - screenMargin;
-  const openUpward = availableBelow < fullMenuHeight && availableAbove > availableBelow;
-  const menuHeight = Math.max(
-    160 * uiScale,
-    Math.min(fullMenuHeight, openUpward ? availableAbove : availableBelow),
-  );
-  const menuTop = openUpward
-    ? Math.max(screenMargin, anchor.y - menuHeight - 1)
-    : anchor.y + anchor.height + 1;
-
-  return (
-    <View
-      accessibilityRole="menu"
-      style={[
-        styles.companyMenu,
-        {
-          width: menuWidth,
-          height: menuHeight,
-          top: menuTop,
-          left: anchor.x + (anchor.width - menuWidth) / 2,
-        },
-      ]}
-    >
-      <ScrollView
-        style={styles.screenScroll}
-        horizontal={false}
-        bounces={false}
-        overScrollMode="never"
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingVertical: menuPadding, paddingHorizontal: 20 * uiScale }}
-      >
-        {COMPANY_OPTIONS.map((company, index) => (
-          <Pressable
-            key={company}
-            accessibilityRole="menuitem"
-            accessibilityLabel={company}
-            onPress={() => onSelectCompany(ruleId, company)}
-            style={({ pressed }) => [
-              styles.companyOption,
-              pressed ? styles.companyOptionPressed : null,
-              {
-                height: optionHeight,
-                borderRadius: 15 * uiScale,
-                marginBottom: index === COMPANY_OPTIONS.length - 1 ? 0 : optionGap,
-              },
-            ]}
-          >
-            <Text numberOfLines={1} style={[styles.companyOptionText, { fontSize: 14 * uiScale }]}>
-              {company}
-            </Text>
-          </Pressable>
-        ))}
-      </ScrollView>
-    </View>
-  );
-}
-
-function SwipeToDelete({
-  children,
-  width,
-  uiScale,
-  showDividerBefore,
-  showDividerAfter,
-  showSpacingAfter,
-  onDelete,
-  onOpenChange,
-  resetSignal,
-}) {
-  const deleteWidth = Math.min(104, 84 * uiScale);
-  const dividerExtension = 21 * uiScale;
-  const topDividerGap = 15 * uiScale;
-  const translateX = React.useRef(new Animated.Value(0)).current;
-  const startX = React.useRef(0);
-  const [isOpen, setIsOpen] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-
-  const animateTo = (toValue, nextOpen) => {
-    setIsOpen(nextOpen);
-    onOpenChange?.(nextOpen);
-    Animated.spring(translateX, {
-      toValue,
-      useNativeDriver: false,
-      bounciness: 0,
-      speed: 24,
-    }).start(() => {
-      setIsOpen(nextOpen);
-      setIsDragging(false);
-    });
-  };
-
-  const panResponder = React.useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: (_, gestureState) => {
-          const horizontalMove = Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2;
-          const enoughMove = Math.abs(gestureState.dx) > 8;
-          return horizontalMove && enoughMove && (gestureState.dx < 0 || isOpen);
-        },
-        onPanResponderGrant: () => {
-          setIsDragging(true);
-          startX.current = isOpen ? -deleteWidth : 0;
-        },
-        onPanResponderMove: (_, gestureState) => {
-          const nextX = Math.max(
-            -deleteWidth,
-            Math.min(0, startX.current + gestureState.dx),
-          );
-          translateX.setValue(nextX);
-        },
-        onPanResponderRelease: (_, gestureState) => {
-          const finalX = startX.current + gestureState.dx;
-          if (finalX < -deleteWidth * 0.45) {
-            animateTo(-deleteWidth, true);
-          } else {
-            animateTo(0, false);
-          }
-        },
-        onPanResponderTerminate: () => {
-          animateTo(isOpen ? -deleteWidth : 0, isOpen);
-        },
-        onPanResponderTerminationRequest: () => false,
-      }),
-    [deleteWidth, isOpen, translateX],
-  );
-
-  React.useEffect(() => {
-    if (resetSignal > 0) {
-      animateTo(0, false);
-    }
-  }, [resetSignal]);
-
-  const deleteAreaExpanded = isOpen || isDragging;
-
-  return (
-    <View
-      style={[
-        styles.swipeRow,
-        {
-          width,
-          marginBottom: showSpacingAfter ? 42 * uiScale : 0,
-        },
-      ]}
-    >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="刪除設定"
-        onPress={onDelete}
-        style={[
-          styles.deleteAction,
-          {
-            width: deleteWidth,
-            top: deleteAreaExpanded ? -(showDividerBefore ? topDividerGap : dividerExtension) : 0,
-            bottom: deleteAreaExpanded ? -dividerExtension : 0,
-          },
-        ]}
-      >
+      {value ? (
         <Text
+          pointerEvents="none"
+          style={[styles.profileDropdownText, { left: 17 * scale, fontSize: 16 * scale }]}
+        >
+          {value}
+        </Text>
+      ) : null}
+      <AssetSvg
+        asset={DROPDOWN_ARROW_IMAGE}
+        width={13 * scale}
+        height={7 * scale}
+        pointerEvents="none"
+        style={{ position: 'absolute', right: 17 * scale }}
+      />
+    </Pressable>
+  );
+}
+
+function ProfileMenu({ scale, onSelect }) {
+  const options = ['大戶', '中間戶', '小股民', '半導體產業', '電子零件產業', '金控產業'];
+  const optionHeight = 48 * scale;
+  const menuTop = (518 + 112) * scale - optionHeight * options.length;
+
+  return (
+    <View
+      style={[
+        styles.profileMenu,
+        {
+          top: menuTop,
+          right: 46 * scale,
+          width: 168 * scale,
+          borderRadius: 14 * scale,
+        },
+      ]}
+    >
+      {options.map((option, index) => (
+        <Pressable
+          key={option}
+          accessibilityRole="button"
+          accessibilityLabel={option}
+          onPress={() => onSelect(option)}
           style={[
-            styles.deleteActionText,
+            styles.profileMenuOption,
             {
-              fontSize: 24 * uiScale,
-              lineHeight: 34 * uiScale,
-              transform: [{ translateX: 6 * uiScale }],
+              height: optionHeight,
+              borderBottomWidth: index === options.length - 1 ? 0 : 3 * scale,
             },
           ]}
         >
-          刪{ '\n' }除
-        </Text>
-      </Pressable>
-      <Animated.View
-        {...panResponder.panHandlers}
-        style={[styles.swipeForeground, { width, transform: [{ translateX }] }]}
-      >
-        {deleteAreaExpanded ? (
-          <>
-            <View
-              pointerEvents="none"
-              style={[
-                styles.swipeForegroundEdge,
-                {
-                  top: -(showDividerBefore ? topDividerGap : dividerExtension),
-                  height: showDividerBefore ? topDividerGap : dividerExtension,
-                },
-              ]}
-            />
-            <View
-              pointerEvents="none"
-              style={[styles.swipeForegroundEdge, { bottom: -dividerExtension, height: dividerExtension }]}
-            />
-          </>
-        ) : null}
-        {children}
-      </Animated.View>
-      {showDividerBefore ? (
-        <View
-          pointerEvents="none"
-          style={[styles.interRuleDivider, { top: -topDividerGap }]}
-        />
-      ) : null}
-      {showDividerAfter ? (
-        <View
-          pointerEvents="none"
-          style={[styles.interRuleDivider, { bottom: -21 * uiScale }]}
-        />
-      ) : null}
+          <Text style={[styles.profileMenuText, { fontSize: 22 * scale, lineHeight: 30 * scale }]}>
+            {option}
+          </Text>
+        </Pressable>
+      ))}
     </View>
   );
 }
 
-function createRule(id) {
-  return {
-    id,
-    alertEnabled: true,
-    highPrice: '',
-    lowPrice: '',
-    highVolume: '',
-    lowVolume: '',
-    year: '',
-    month: '',
-    day: '',
-    selectedCompany: '',
-  };
-}
-
-function RuleForm({
-  rule,
-  uiScale,
-  contentWidth,
-  inputWidth,
-  dateInputWidth,
-  textSize,
-  pickerWidth,
-  pickerHeight,
-  menuWidth,
-  isDeleteMode,
-  menuOpen,
-  showSpacingAfter,
-  onUpdate,
-  onToggleMenu,
-  onSelectCompany,
-}) {
-  const update = (field, value) => onUpdate(rule.id, field, value);
-  const pickerRef = React.useRef(null);
-
-  const handleToggleMenu = () => {
-    if (menuOpen) {
-      onToggleMenu();
-      return;
-    }
-
-    if (pickerRef.current?.measureInWindow) {
-      pickerRef.current.measureInWindow((x, y, width, height) => {
-        onToggleMenu({ x, y, width, height });
-      });
-      return;
-    }
-
-    onToggleMenu(null);
-  };
-
+function Avatar({ imageUri, size }) {
   return (
-    <View
-      style={[
-        styles.ruleBlock,
-        {
-          width: contentWidth,
-          marginBottom: 0,
-          zIndex: menuOpen ? 50 : 1,
-        },
-      ]}
-    >
-      <View
-        style={[
-        styles.companyPickerLayer,
-          {
-            width: pickerWidth,
-            height: pickerHeight,
-            marginLeft: 0,
-            alignSelf: 'center',
-            zIndex: menuOpen ? 50 : 1,
-          },
-        ]}
-        ref={pickerRef}
-      >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="選擇公司"
-          onPress={handleToggleMenu}
-          disabled={isDeleteMode}
-          style={[styles.companyPicker, { width: pickerWidth, height: pickerHeight }]}
-        >
-          <View pointerEvents="none" style={styles.companyPickerInnerBorder} />
-          <Text
-            numberOfLines={1}
-            style={[
-              styles.companyPlaceholder,
-              {
-                flex: 1,
-                marginLeft: 20 * uiScale,
-                marginRight: 42 * uiScale,
-                fontSize: 16 * uiScale,
-                textAlign: 'left',
-              },
-              rule.selectedCompany ? styles.companySelected : null,
-            ]}
-          >
-            {rule.selectedCompany || '選擇公司'}
-          </Text>
-          <AssetSvg
-            asset={DROPDOWN_ARROW_IMAGE}
-            width={15 * uiScale}
-            height={8 * uiScale}
-            pointerEvents="none"
-            style={[styles.dropdownArrow, { right: 24 * uiScale }]}
-          />
-        </Pressable>
-      </View>
-
-      <View style={[styles.alertRow, { height: 26 * uiScale, marginTop: 16 * uiScale, paddingHorizontal: 12 * uiScale }]}> 
-        <Text style={[styles.label, { fontSize: textSize, lineHeight: 26 * uiScale }]}>觸價警示</Text>
-        <Toggle
-          value={rule.alertEnabled}
-          onPress={() => update('alertEnabled', !rule.alertEnabled)}
-          scale={uiScale}
-          disabled={isDeleteMode}
+    <View style={[styles.avatar, { borderRadius: size / 2 }]}>
+      {imageUri ? (
+        <Image
+          source={{ uri: imageUri }}
+          resizeMode="cover"
+          style={styles.avatarImage}
         />
-      </View>
-
-      <View style={[styles.fieldGroup, { marginTop: 15 * uiScale, paddingLeft: 48 * uiScale }]}> 
-        <View style={[styles.fieldRow, { height: 26 * uiScale, marginBottom: 11 * uiScale }]}> 
-          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>股價高達 $</Text>
-          <NumericField value={rule.highPrice} onChangeText={(value) => update('highPrice', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
-        </View>
-        <View style={[styles.fieldRow, { height: 26 * uiScale }]}> 
-          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>股價低於 $</Text>
-          <NumericField value={rule.lowPrice} onChangeText={(value) => update('lowPrice', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
-        </View>
-      </View>
-
-      <View style={[styles.fieldGroup, styles.volumeGroup, { marginTop: 16 * uiScale, paddingLeft: 48 * uiScale }]}> 
-        <View style={[styles.fieldRow, { height: 26 * uiScale, marginBottom: 11 * uiScale }]}> 
-          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>成交量大於</Text>
-          <NumericField value={rule.highVolume} onChangeText={(value) => update('highVolume', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
-        </View>
-        <View style={[styles.fieldRow, { height: 26 * uiScale }]}> 
-          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>成交量大於</Text>
-          <NumericField value={rule.lowVolume} onChangeText={(value) => update('lowVolume', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
-        </View>
-      </View>
-
-      <View style={[styles.dateRow, { marginTop: 26 * uiScale, paddingLeft: 50 * uiScale }]}> 
-        <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>至</Text>
-        <NumericField value={rule.year} onChangeText={(value) => update('year', value)} width={dateInputWidth} scale={uiScale} radius={5} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
-        <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>年</Text>
-        <NumericField value={rule.month} onChangeText={(value) => update('month', value)} width={dateInputWidth} scale={uiScale} radius={5} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
-        <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>月</Text>
-        <NumericField value={rule.day} onChangeText={(value) => update('day', value)} width={dateInputWidth} scale={uiScale} radius={5} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
-        <Text numberOfLines={1} style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>日 為止</Text>
-      </View>
+      ) : (
+        <AssetSvg
+          asset={PROFILE_PHOTO_IMAGE}
+          width={size}
+          height={size}
+          pointerEvents="none"
+        />
+      )}
     </View>
   );
 }
@@ -488,211 +154,291 @@ export default function Setting() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
-  const uiScale = Math.min(Math.max(screenWidth / 471, 0.85), 1.35);
-  const contentWidth = Math.min(528, Math.max(280, screenWidth - 92));
-  const inputWidth = 108 * uiScale;
-  const dateInputWidth = 52 * uiScale;
-  const textSize = 16 * uiScale;
-  const pickerWidth = Math.min(340, contentWidth * 0.64);
-  const pickerHeight = 29 * uiScale;
-  const menuWidth = pickerWidth * 0.88;
-  const [rules, setRules] = useState(() => [createRule(1)]);
-  const [openDropdown, setOpenDropdown] = useState(null);
-  const [openSwipeId, setOpenSwipeId] = useState(null);
-  const [deleteModeActive, setDeleteModeActive] = useState(false);
-  const [swipeResetSignal, setSwipeResetSignal] = useState(0);
-  const nextRuleId = React.useRef(2);
+  const {
+    actionWindowEnabled,
+    setActionWindowEnabled,
+    allowFractional,
+    setAllowFractional,
+  } = useAppSettings();
+  const scale = Math.min(Math.max(screenWidth / 457, 0.85), 1.35);
+  const [showCustomGroupName, setShowCustomGroupName] = useState(false);
+  const [openMenu, setOpenMenu] = useState(null);
+  const [defaultGroup, setDefaultGroup] = useState('');
+  const [profileImageUri, setProfileImageUri] = useState(null);
+  const [draftProfileImageUri, setDraftProfileImageUri] = useState(null);
+  const [profileName, setProfileName] = useState('');
+  const [draftName, setDraftName] = useState('');
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [ruleCount, setRuleCount] = useState(1);
+  const [ruleDeleteMode, setRuleDeleteMode] = useState(false);
+  const [allowFractionalSaving, setAllowFractionalSaving] = useState(false);
+  const canvasHeight = Math.max(
+    screenHeight,
+    (900 + ruleCount * 470) * scale,
+  );
 
-  const updateRule = (ruleId, field, value) => {
-    setRules((current) =>
-      current.map((rule) => (rule.id === ruleId ? { ...rule, [field]: value } : rule)),
-    );
-  };
+  const handleChangePhoto = async () => {
+    try {
+      if (Platform.OS !== 'web') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) return;
+      }
 
-  const addRule = () => {
-    if (deleteModeActive) {
-      return;
-    }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 1,
+      });
 
-    const ruleId = nextRuleId.current;
-    nextRuleId.current += 1;
-    setRules((current) => [...current, createRule(ruleId)]);
-    setOpenDropdown(null);
-  };
-
-  const removeRule = (ruleId) => {
-    const lastRuleDeleted = rules.length === 1 && rules[0].id === ruleId;
-
-    setRules((current) => {
-      const remaining = current.filter((rule) => rule.id !== ruleId);
-      return remaining.length > 0 ? remaining : [createRule(1)];
-    });
-    setOpenDropdown(null);
-    setOpenSwipeId(null);
-
-    if (lastRuleDeleted) {
-      setDeleteModeActive(false);
-      setSwipeResetSignal((current) => current + 1);
-    } else {
-      setDeleteModeActive(true);
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        setDraftProfileImageUri(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.warn('無法選擇頭像', error);
     }
   };
 
-  const cancelSwipe = () => {
-    setRules((current) => (current.length > 0 ? current : [createRule(1)]));
-    setOpenSwipeId(null);
-    setDeleteModeActive(false);
-    setSwipeResetSignal((current) => current + 1);
+  const handleStartEditingProfile = () => {
+    setOpenMenu(null);
+    setDraftName(profileName);
+    setDraftProfileImageUri(profileImageUri);
+    setIsEditingProfile(true);
   };
 
-  React.useEffect(() => {
+  const handleFinishEditingProfile = () => {
+    setProfileName(draftName.trim());
+    setProfileImageUri(draftProfileImageUri);
+    setIsEditingProfile(false);
+  };
+
+  const handleCancelEditingProfile = () => {
+    setDraftName(profileName);
+    setDraftProfileImageUri(profileImageUri);
+    setIsEditingProfile(false);
+  };
+
+  const handleAllowFractionalToggle = async () => {
+    if (allowFractionalSaving) return;
+
+    const previousValue = allowFractional;
+    const nextValue = !previousValue;
+    setAllowFractional(nextValue);
+    setAllowFractionalSaving(true);
+
+    try {
+      await updateAllowFractional(nextValue);
+    } catch (error) {
+      setAllowFractional(previousValue);
+      console.warn('零股設定同步失敗', error);
+    } finally {
+      setAllowFractionalSaving(false);
+    }
+  };
+
+  useEffect(() => {
     navigation.setOptions({
-      tabBarStyle: deleteModeActive ? { display: 'none' } : TAB_BAR_STYLE,
+      tabBarStyle: showCustomGroupName || ruleDeleteMode
+        ? { display: 'none' }
+        : TAB_BAR_STYLE,
     });
 
     return () => navigation.setOptions({ tabBarStyle: TAB_BAR_STYLE });
-  }, [navigation, deleteModeActive]);
+  }, [navigation, ruleDeleteMode, showCustomGroupName]);
 
-  const selectCompany = (ruleId, company) => {
-    updateRule(ruleId, 'selectedCompany', company);
-    setOpenDropdown(null);
-  };
+  if (showCustomGroupName) {
+    return <CustomGroupName onBack={() => setShowCustomGroupName(false)} />;
+  }
 
   return (
     <View style={[styles.container, { width: screenWidth }]}>
       <ScrollView
+        style={styles.screenScroll}
         horizontal={false}
         bounces={false}
         overScrollMode="never"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.content,
-          {
-            width: screenWidth,
-            paddingBottom: Math.max(insets.bottom, 18) + 8 + 58 + 20 * uiScale,
-          },
-        ]}
+        contentContainerStyle={{
+          width: screenWidth,
+          minHeight: canvasHeight,
+          paddingBottom: insets.bottom + 82 * scale,
+        }}
       >
-        <View
-          style={[
-            styles.form,
-            {
-              width: screenWidth,
-              paddingTop: screenHeight * 0.085,
-            },
-          ]}
-        >
-          {rules.map((rule, index) => (
-            <SwipeToDelete
-              key={rule.id}
-              width={screenWidth}
-              uiScale={uiScale}
-              showDividerBefore={deleteModeActive && index === 0}
-              showDividerAfter={deleteModeActive && index < rules.length - 1}
-              showSpacingAfter={index < rules.length - 1}
-              onDelete={() => removeRule(rule.id)}
-              resetSignal={swipeResetSignal}
-              onOpenChange={(isOpen) => {
-                if (isOpen) {
-                  setDeleteModeActive(true);
-                  setOpenSwipeId(rule.id);
-                } else {
-                  setOpenSwipeId((current) => (current === rule.id ? null : current));
-                }
-              }}
-            >
-              <RuleForm
-                rule={rule}
-                uiScale={uiScale}
-                contentWidth={contentWidth}
-                inputWidth={inputWidth}
-                dateInputWidth={dateInputWidth}
-                textSize={textSize}
-                pickerWidth={pickerWidth}
-                pickerHeight={pickerHeight}
-                menuWidth={menuWidth}
-                isDeleteMode={deleteModeActive}
-                menuOpen={openDropdown?.ruleId === rule.id}
-                showSpacingAfter={false}
-                onUpdate={updateRule}
-                onToggleMenu={(anchor) =>
-                  setOpenDropdown((current) => {
-                    if (current?.ruleId === rule.id) {
-                      return null;
-                    }
-                    return { ruleId: rule.id, anchor };
-                  })
-                }
-                onSelectCompany={selectCompany}
-              />
-            </SwipeToDelete>
-          ))}
+        <View style={[styles.canvas, { width: screenWidth, height: canvasHeight }]}>
+          <View
+            pointerEvents="none"
+            style={[
+              styles.topBackdrop,
+              {
+                top: -184 * scale,
+                left: (screenWidth - 460 * scale) / 2,
+                width: 460 * scale,
+                height: 460 * scale,
+                borderRadius: 230 * scale,
+                transform: [{ scaleX: screenWidth * 1.2 / (460 * scale) }],
+              },
+            ]}
+          />
 
-          {!deleteModeActive ? (
+          <Text style={[styles.pageTitle, { top: 52 * scale, fontSize: 30 * scale }]}>帳戶</Text>
+
+          {isEditingProfile ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="新增設定"
-              onPress={addRule}
-              style={[styles.addRuleButton, { width: contentWidth, height: 80 * uiScale, marginTop: 38 * uiScale }]}
+              accessibilityLabel="取消編輯帳戶"
+              onPress={handleCancelEditingProfile}
+              style={[styles.cancelButton, { top: 35 * scale, left: 10 * scale }]}
             >
-              <Text style={[styles.addRuleText, { fontSize: 26 * uiScale }]}>
-                +
-              </Text>
+              <Text style={[styles.cancelText, { fontSize: 16 * scale }]}>取消</Text>
             </Pressable>
           ) : null}
-        </View>
-      </ScrollView>
 
-      {deleteModeActive ? (
-        <View
-          pointerEvents="box-none"
-          style={[styles.swipeCancelLayer, { paddingBottom: Math.max(insets.bottom, 18) + 18 }]}
-        >
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="取消刪除"
-            onPress={cancelSwipe}
+            accessibilityLabel={isEditingProfile ? '完成編輯帳戶' : '編輯帳戶'}
+            onPress={isEditingProfile ? handleFinishEditingProfile : handleStartEditingProfile}
+            style={[styles.editButton, { top: 35 * scale, right: 10 * scale }]}
+          >
+            <Text style={[styles.editText, { fontSize: 16 * scale }]}>
+              {isEditingProfile ? '完成' : '編輯'}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="更換頭像"
+            onPress={isEditingProfile ? handleChangePhoto : undefined}
+            disabled={!isEditingProfile}
             style={[
-              styles.swipeCancelButton,
+              styles.avatarWrap,
               {
-                width: Math.min(screenWidth * 0.86, 420),
-                height: 44,
+                top: 102 * scale,
+                width: 235 * scale,
+                height: 235 * scale,
+                borderRadius: 118 * scale,
               },
             ]}
           >
-            <Text style={[styles.swipeCancelText, { fontSize: 24 * uiScale }]}>取消</Text>
+            <Avatar
+              imageUri={isEditingProfile ? draftProfileImageUri : profileImageUri}
+              size={235 * scale}
+            />
           </Pressable>
-        </View>
-      ) : null}
 
-      {openDropdown ? (
-        <Modal
-          transparent
-          visible
-          animationType="none"
-          statusBarTranslucent
-          onRequestClose={() => setOpenDropdown(null)}
-        >
-          <View pointerEvents="box-none" style={styles.dropdownModalOverlay}>
+          <View
+            style={[
+              styles.nameField,
+              {
+                top: 350 * scale,
+                width: 243 * scale,
+                height: 82 * scale,
+              },
+            ]}
+          >
+            <AssetSvg
+              asset={NAME_IMAGE}
+              width={243 * scale}
+              height={82 * scale}
+              pointerEvents="none"
+            />
+            <View
+              pointerEvents={isEditingProfile ? 'auto' : 'none'}
+              style={[
+                styles.nameOverlay,
+                {
+                  top: 30 * scale,
+                  width: 223 * scale,
+                  height: 41 * scale,
+                },
+              ]}
+            >
+              {isEditingProfile ? (
+                <TextInput
+                  accessibilityLabel="輸入姓名"
+                  autoFocus
+                  value={draftName}
+                  onChangeText={setDraftName}
+                  placeholder="Name"
+                  placeholderTextColor="#000000"
+                  maxLength={24}
+                  style={[styles.nameText, styles.nameInput, { fontSize: 18 * scale }]}
+                />
+              ) : (
+                <Text style={[styles.nameText, { fontSize: 18 * scale }]}>
+                  {profileName || 'Name'}
+                </Text>
+              )}
+            </View>
+          </View>
+
+          <View
+            style={[
+              styles.profileSettings,
+              {
+                top: 518 * scale,
+                height: 224 * scale,
+              },
+            ]}
+          >
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="關閉公司選單"
-              onPress={() => setOpenDropdown(null)}
-              style={styles.dropdownBackdrop}
-            />
-            {openDropdown.anchor ? (
-              <CompanyMenu
-                anchor={openDropdown.anchor}
-                menuWidth={menuWidth}
-                uiScale={uiScale}
-                screenHeight={screenHeight}
-                ruleId={openDropdown.ruleId}
-                onSelectCompany={selectCompany}
+              accessibilityLabel="更改自訂群組命名"
+              onPress={() => setShowCustomGroupName(true)}
+              style={[styles.settingRow, { top: 0, paddingLeft: 50 * scale, paddingRight: 45 * scale }]}
+            >
+              <Text style={[styles.settingLabel, { fontSize: 21 * scale }]}>更改自訂群組命名</Text>
+              <Text style={[styles.chevron, { fontSize: 40 * scale }]}>›</Text>
+            </Pressable>
+
+            <View style={[styles.settingRow, { top: 58 * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
+              <Text style={[styles.settingLabel, { fontSize: 21 * scale }]}>預設股票群組</Text>
+              <ProfileDropdown
+                scale={scale}
+                value={defaultGroup}
+                onPress={() => setOpenMenu((current) => (current === 'group' ? null : 'group'))}
               />
-            ) : null}
+            </View>
+
+            <View style={[styles.settingRow, { top: 112 * scale, paddingLeft: 50 * scale, paddingRight: 53 * scale }]}>
+              <Text style={[styles.settingLabel, { fontSize: 21 * scale }]}>行動窗口</Text>
+              <Toggle
+                value={actionWindowEnabled}
+                onPress={() => setActionWindowEnabled((current) => !current)}
+                scale={scale}
+                accessibilityLabel="行動窗口"
+              />
+            </View>
+
+            <View style={[styles.settingRow, { top: 166 * scale, paddingLeft: 50 * scale, paddingRight: 53 * scale }]}>
+              <Text style={[styles.settingLabel, { fontSize: 21 * scale }]}>允許零股</Text>
+              <Toggle
+                value={allowFractional}
+                onPress={handleAllowFractionalToggle}
+                scale={scale}
+                disabled={allowFractionalSaving}
+                accessibilityLabel="允許零股"
+              />
+            </View>
           </View>
-        </Modal>
-      ) : null}
+
+          {openMenu ? (
+            <ProfileMenu
+              scale={scale}
+              onSelect={(value) => {
+                setDefaultGroup(value);
+                setOpenMenu(null);
+              }}
+            />
+          ) : null}
+
+          <View style={[styles.triggerRules, { top: 754 * scale }]}>
+            <TriggerRulesSection
+              onRuleCountChange={setRuleCount}
+              onDeleteModeChange={setRuleDeleteMode}
+            />
+          </View>
+        </View>
+      </ScrollView>
     </View>
   );
 }
@@ -706,163 +452,103 @@ const styles = StyleSheet.create({
     flex: 1,
     width: '100%',
   },
-  content: {
-    flexGrow: 1,
-    alignItems: 'center',
-  },
-  form: {
-    marginTop: 0,
-  },
-  swipeRow: {
+  canvas: {
     position: 'relative',
     alignSelf: 'center',
-    overflow: 'visible',
-  },
-  swipeForeground: {
-    position: 'relative',
-    zIndex: 1,
     backgroundColor: '#2E2F2E',
+    overflow: 'hidden',
   },
-  swipeForegroundEdge: {
+  topBackdrop: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    backgroundColor: '#2E2F2E',
+    backgroundColor: '#D9D9D9',
+  },
+  pageTitle: {
+    position: 'absolute',
+    alignSelf: 'center',
+    color: '#2E2F2E',
+    fontFamily: 'Goldman',
+    lineHeight: 38,
+  },
+  editButton: {
+    position: 'absolute',
     zIndex: 2,
   },
-  interRuleDivider: {
+  cancelButton: {
+    position: 'absolute',
+    zIndex: 2,
+  },
+  editText: {
+    color: '#F1F1F1',
+    fontFamily: 'Goldman',
+  },
+  cancelText: {
+    color: '#F1F1F1',
+    fontFamily: 'Goldman',
+  },
+  avatarWrap: {
+    position: 'absolute',
+    alignSelf: 'center',
+    zIndex: 2,
+  },
+  avatar: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 118,
+    overflow: 'hidden',
+    backgroundColor: '#2E2F2E',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  nameField: {
+    position: 'absolute',
+    alignSelf: 'center',
+    zIndex: 3,
+  },
+  nameOverlay: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nameText: {
+    color: '#000000',
+    fontFamily: 'Goldman',
+  },
+  nameInput: {
+    width: '90%',
+    padding: 0,
+    textAlign: 'center',
+    outlineStyle: 'none',
+  },
+  profileSettings: {
     position: 'absolute',
     left: 0,
     right: 0,
-    height: 1,
-    zIndex: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
   },
-  deleteAction: {
+  triggerRules: {
     position: 'absolute',
-    top: 0,
+    left: 0,
     right: 0,
-    bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#A93E3E',
-    overflow: 'hidden',
-    boxShadow: 'inset 4px 4px 4px 0 rgba(0, 0, 0, 0.25)',
+    zIndex: 4,
   },
-  deleteActionText: {
-    color: '#FFFFFF',
-    fontFamily: 'Goldman',
-    textAlign: 'center',
-  },
-  swipeCancelLayer: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    zIndex: 120,
-    elevation: 120,
-  },
-  swipeCancelButton: {
-    alignSelf: 'center',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#585858',
-    borderRadius: 50,
-    borderWidth: 1,
-    borderColor: '#939292',
-  },
-  swipeCancelText: {
-    color: '#FFFFFF',
-    fontFamily: 'Goldman',
-  },
-  ruleBlock: {
-    position: 'relative',
-    alignSelf: 'center',
-    overflow: 'visible',
-  },
-  dropdownBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-  },
-  dropdownModalOverlay: {
-    flex: 1,
-    position: 'relative',
-  },
-  companyPickerLayer: {
-    position: 'relative',
-    alignSelf: 'center',
-    overflow: 'visible',
-  },
-  companyPicker: {
-    position: 'relative',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    borderRadius: 50,
-    borderWidth: 0,
-    borderColor: 'transparent',
-    backgroundColor: 'rgba(217, 217, 217, 0.3)',
-    boxShadow:
-      'inset -4px -4px 4px rgba(255, 255, 255, 0.25), inset 6px 6px 4px rgba(0, 0, 0, 0.25)',
-  },
-  companyPickerInnerBorder: {
+  settingRow: {
     position: 'absolute',
-    top: 1,
-    right: 1,
-    bottom: 1,
-    left: 1,
-    borderRadius: 49,
-    borderWidth: 0.5,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
-  },
-  companyPlaceholder: {
-    color: 'rgba(217, 217, 217, 0.3)',
-    fontFamily: 'Goldman',
-    lineHeight: 24,
-  },
-  companySelected: {
-    color: '#FFFFFF',
-  },
-  companyMenu: {
-    position: 'absolute',
-    alignItems: 'stretch',
-    backgroundColor: '#636060',
-    zIndex: 100,
-    elevation: 100,
-  },
-  companyOption: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(217, 217, 217, 1)',
-    backgroundColor: 'rgba(217, 217, 217, 0.3)',
-    boxShadow:
-      '2px 2px 4px rgba(0, 0, 0, 0.2)',
-  },
-  companyOptionPressed: {
-    borderColor: '#D9D9D9',
-    backgroundColor: '#6A6A6A',
-    boxShadow: 'inset 2px 2px 4px rgba(93, 106, 140, 1)',
-  },
-  companyOptionText: {
-    color: '#FFFFFF',
-    fontFamily: 'Goldman',
-    lineHeight: 20,
-  },
-  dropdownArrow: {
-    position: 'absolute',
-  },
-  alertRow: {
-    width: '100%',
-    height: 20,
+    left: 0,
+    right: 0,
+    height: 30,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  settingLabel: {
+    color: '#F1F1F1',
+    fontFamily: 'Goldman',
+    lineHeight: 30,
+  },
   toggle: {
-    width: 64,
-    height: 25,
-    borderRadius: 13,
     justifyContent: 'center',
+    backgroundColor: '#55DF32',
   },
   toggleOn: {
     backgroundColor: '#55DF32',
@@ -870,99 +556,52 @@ const styles = StyleSheet.create({
   toggleOff: {
     backgroundColor: '#777777',
   },
+  toggleDisabled: {
+    opacity: 0.55,
+  },
   toggleThumb: {
-    width: 23,
-    height: 23,
-    borderRadius: 12,
     backgroundColor: '#D9D9D9',
   },
-  thumbLeft: {
-    marginLeft: 1,
-  },
-  thumbRight: {
-    alignSelf: 'flex-end',
-    marginRight: 1,
-  },
-  label: {
-    fontFamily: 'Goldman',
-    color: '#F1F1F1',
-    fontSize: 14,
-    lineHeight: 26,
-  },
-  fieldGroup: {
-    marginTop: 10,
-  },
-  volumeGroup: {
-    marginTop: 5,
-  },
-  fieldRow: {
-    height: 26,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  fieldLabel: {
-    fontFamily: 'Goldman',
-    color: '#F1F1F1',
-    fontSize: 14,
-    lineHeight: 26,
-    textAlign: 'right',
-  },
-  input: {
-    fontFamily: 'Goldman',
-    margin: 0,
-    paddingHorizontal: 10,
-    paddingVertical: 0,
-    borderWidth: 0,
-    borderColor: 'transparent',
-    borderRadius: 50,
-    backgroundColor: 'transparent',
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: 16,
-    lineHeight: 22,
-    outlineStyle: 'none',
-  },
-  inputFrame: {
+  profileDropdown: {
     position: 'relative',
-    borderWidth: 0,
-    borderColor: 'transparent',
-    backgroundColor: 'rgba(217, 217, 217, 0.3)',
-    boxShadow:
-      'inset -4px -4px 4px rgba(255, 255, 255, 0.25), inset 6px 6px 4px rgba(0, 0, 0, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#7B828B',
+    boxShadow: 'inset -4px -4px 4px rgba(255, 255, 255, 0.25), inset 6px 6px 4px rgba(0, 0, 0, 0.25)',
   },
-  inputInnerBorder: {
+  profileDropdownBorder: {
     position: 'absolute',
     top: 1,
     right: 1,
     bottom: 1,
     left: 1,
     borderWidth: 0.5,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
+    borderColor: '#5E6E7F',
   },
-  dateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  dateLabel: {
+  profileDropdownText: {
+    position: 'absolute',
+    color: '#D9D9D9',
     fontFamily: 'Goldman',
-    color: '#F1F1F1',
-    fontSize: 14,
-    lineHeight: 26,
-    marginHorizontal: 4,
   },
-  addRuleButton: {
-    width: '100%',
-    alignSelf: 'center',
+  profileMenu: {
+    position: 'absolute',
+    overflow: 'hidden',
+    zIndex: 20,
+    backgroundColor: '#AFB7BF',
+  },
+  profileMenuOption: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: 'rgba(217, 217, 217, 0.56)',
-    backgroundColor: 'rgba(217, 217, 217, 0.18)',
+    borderBottomColor: '#5E6E7F',
   },
-  addRuleText: {
-    color: '#F1F1F1',
+  profileMenuText: {
+    color: '#D9D9D9',
     fontFamily: 'Goldman',
-    fontWeight: '400',
-    lineHeight: 30,
+    textAlign: 'center',
+  },
+  chevron: {
+    color: '#F1F1F1',
+    fontFamily: 'Arial',
+    lineHeight: 38,
   },
 });
