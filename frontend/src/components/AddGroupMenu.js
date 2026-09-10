@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { getCustomGroupDisplayName } from '../utils/customGroups';
+import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const PRESSED_FEEDBACK_MS = 120;
 
@@ -238,7 +239,7 @@ export default function AddGroupMenu({
   customGroups = [],
   includeCategories = false,
 }) {
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth } = useViewportDimensions();
   const [pressedId, setPressedId] = useState(null);
   const releaseTimerRef = useRef(null);
   const selectTimerRef = useRef(null);

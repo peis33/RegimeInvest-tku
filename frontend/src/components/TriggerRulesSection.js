@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Animated,
   Modal,
@@ -10,13 +10,11 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import AssetSvg from '../components/AssetSvg';
-import { TAB_BAR_STYLE } from '../components/TabBar';
+import AssetSvg from './AssetSvg';
 import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const DROPDOWN_ARROW_IMAGE = require('../assets/image/DropdownArrow.svg');
+
 const COMPANY_OPTIONS = [
   '台積電',
   '聯發科',
@@ -37,9 +35,9 @@ const COMPANY_OPTIONS = [
 ];
 
 function Toggle({ value, onPress, scale = 1, disabled = false }) {
-  const width = 61 * scale;
-  const height = 25 * scale;
-  const thumbSize = 23 * scale;
+  const width = 63 * scale;
+  const height = 23 * scale;
+  const thumbSize = 21 * scale;
 
   return (
     <Pressable
@@ -83,7 +81,7 @@ function NumericField({
   const height = 26 * scale;
 
   return (
-    <View style={[styles.inputFrame, { width, height, borderRadius: radius }, containerStyle]}> 
+    <View style={[styles.inputFrame, { width, height, borderRadius: radius }, containerStyle]}>
       <TextInput
         value={value}
         onChangeText={onChangeText}
@@ -144,10 +142,6 @@ function CompanyMenu({ anchor, menuWidth, uiScale, screenHeight, ruleId, onSelec
       ]}
     >
       <ScrollView
-        style={styles.screenScroll}
-        horizontal={false}
-        bounces={false}
-        overScrollMode="never"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingVertical: menuPadding, paddingHorizontal: 20 * uiScale }}
       >
@@ -246,7 +240,7 @@ function SwipeToDelete({
     [deleteWidth, isOpen, translateX],
   );
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (resetSignal > 0) {
       animateTo(0, false);
     }
@@ -287,7 +281,7 @@ function SwipeToDelete({
             },
           ]}
         >
-          刪{ '\n' }除
+          {'刪\n除'}
         </Text>
       </Pressable>
       <Animated.View
@@ -354,13 +348,11 @@ function RuleForm({
   textSize,
   pickerWidth,
   pickerHeight,
-  menuWidth,
+  screenWidth,
   isDeleteMode,
   menuOpen,
-  showSpacingAfter,
   onUpdate,
   onToggleMenu,
-  onSelectCompany,
 }) {
   const update = (field, value) => onUpdate(rule.id, field, value);
   const pickerRef = React.useRef(null);
@@ -387,18 +379,37 @@ function RuleForm({
         styles.ruleBlock,
         {
           width: contentWidth,
-          marginBottom: 0,
           zIndex: menuOpen ? 50 : 1,
         },
       ]}
     >
       <View
         style={[
-        styles.companyPickerLayer,
+          styles.alertRow,
+          {
+            width: screenWidth,
+            marginLeft: -(screenWidth - contentWidth) / 2,
+            height: 30 * uiScale,
+            paddingLeft: 50 * uiScale,
+            paddingRight: 53 * uiScale,
+          },
+        ]}
+      >
+        <Text style={[styles.label, { fontSize: 21 * uiScale, lineHeight: 30 * uiScale }]}>觸價警示</Text>
+        <Toggle
+          value={rule.alertEnabled}
+          onPress={() => update('alertEnabled', !rule.alertEnabled)}
+          scale={uiScale}
+          disabled={isDeleteMode}
+        />
+      </View>
+
+      <View
+        style={[
+          styles.companyPickerLayer,
           {
             width: pickerWidth,
             height: pickerHeight,
-            marginLeft: 0,
             alignSelf: 'center',
             zIndex: menuOpen ? 50 : 1,
           },
@@ -439,39 +450,29 @@ function RuleForm({
         </Pressable>
       </View>
 
-      <View style={[styles.alertRow, { height: 26 * uiScale, marginTop: 16 * uiScale, paddingHorizontal: 12 * uiScale }]}> 
-        <Text style={[styles.label, { fontSize: textSize, lineHeight: 26 * uiScale }]}>觸價警示</Text>
-        <Toggle
-          value={rule.alertEnabled}
-          onPress={() => update('alertEnabled', !rule.alertEnabled)}
-          scale={uiScale}
-          disabled={isDeleteMode}
-        />
-      </View>
-
-      <View style={[styles.fieldGroup, { marginTop: 15 * uiScale, paddingLeft: 48 * uiScale }]}> 
-        <View style={[styles.fieldRow, { height: 26 * uiScale, marginBottom: 11 * uiScale }]}> 
+      <View style={[styles.fieldGroup, { marginTop: 15 * uiScale, paddingLeft: 48 * uiScale }]}>
+        <View style={[styles.fieldRow, { height: 26 * uiScale, marginBottom: 11 * uiScale }]}>
           <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>股價高達 $</Text>
           <NumericField value={rule.highPrice} onChangeText={(value) => update('highPrice', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
         </View>
-        <View style={[styles.fieldRow, { height: 26 * uiScale }]}> 
+        <View style={[styles.fieldRow, { height: 26 * uiScale }]}>
           <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>股價低於 $</Text>
           <NumericField value={rule.lowPrice} onChangeText={(value) => update('lowPrice', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
         </View>
       </View>
 
-      <View style={[styles.fieldGroup, styles.volumeGroup, { marginTop: 16 * uiScale, paddingLeft: 48 * uiScale }]}> 
-        <View style={[styles.fieldRow, { height: 26 * uiScale, marginBottom: 11 * uiScale }]}> 
+      <View style={[styles.fieldGroup, styles.volumeGroup, { marginTop: 16 * uiScale, paddingLeft: 48 * uiScale }]}>
+        <View style={[styles.fieldRow, { height: 26 * uiScale, marginBottom: 11 * uiScale }]}>
           <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>成交量大於</Text>
           <NumericField value={rule.highVolume} onChangeText={(value) => update('highVolume', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
         </View>
-        <View style={[styles.fieldRow, { height: 26 * uiScale }]}> 
+        <View style={[styles.fieldRow, { height: 26 * uiScale }]}>
           <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>成交量大於</Text>
           <NumericField value={rule.lowVolume} onChangeText={(value) => update('lowVolume', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
         </View>
       </View>
 
-      <View style={[styles.dateRow, { marginTop: 26 * uiScale, paddingLeft: 50 * uiScale }]}> 
+      <View style={[styles.dateRow, { marginTop: 26 * uiScale, paddingLeft: 50 * uiScale }]}>
         <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>至</Text>
         <NumericField value={rule.year} onChangeText={(value) => update('year', value)} width={dateInputWidth} scale={uiScale} radius={5} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
         <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>年</Text>
@@ -484,9 +485,10 @@ function RuleForm({
   );
 }
 
-export default function Setting() {
-  const navigation = useNavigation();
-  const insets = useSafeAreaInsets();
+/**
+ * 原設定頁的觸價規則內容，現在可嵌入帳戶／Setting 頁的同一個捲動畫布。
+ */
+export default function TriggerRulesSection({ onRuleCountChange, onDeleteModeChange }) {
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const uiScale = Math.min(Math.max(screenWidth / 471, 0.85), 1.35);
   const contentWidth = Math.min(528, Math.max(280, screenWidth - 92));
@@ -498,10 +500,17 @@ export default function Setting() {
   const menuWidth = pickerWidth * 0.88;
   const [rules, setRules] = useState(() => [createRule(1)]);
   const [openDropdown, setOpenDropdown] = useState(null);
-  const [openSwipeId, setOpenSwipeId] = useState(null);
   const [deleteModeActive, setDeleteModeActive] = useState(false);
   const [swipeResetSignal, setSwipeResetSignal] = useState(0);
   const nextRuleId = React.useRef(2);
+
+  useEffect(() => {
+    onRuleCountChange?.(rules.length);
+  }, [onRuleCountChange, rules.length]);
+
+  useEffect(() => {
+    onDeleteModeChange?.(deleteModeActive);
+  }, [deleteModeActive, onDeleteModeChange]);
 
   const updateRule = (ruleId, field, value) => {
     setRules((current) =>
@@ -510,9 +519,7 @@ export default function Setting() {
   };
 
   const addRule = () => {
-    if (deleteModeActive) {
-      return;
-    }
+    if (deleteModeActive) return;
 
     const ruleId = nextRuleId.current;
     nextRuleId.current += 1;
@@ -528,7 +535,6 @@ export default function Setting() {
       return remaining.length > 0 ? remaining : [createRule(1)];
     });
     setOpenDropdown(null);
-    setOpenSwipeId(null);
 
     if (lastRuleDeleted) {
       setDeleteModeActive(false);
@@ -540,18 +546,9 @@ export default function Setting() {
 
   const cancelSwipe = () => {
     setRules((current) => (current.length > 0 ? current : [createRule(1)]));
-    setOpenSwipeId(null);
     setDeleteModeActive(false);
     setSwipeResetSignal((current) => current + 1);
   };
-
-  React.useEffect(() => {
-    navigation.setOptions({
-      tabBarStyle: deleteModeActive ? { display: 'none' } : TAB_BAR_STYLE,
-    });
-
-    return () => navigation.setOptions({ tabBarStyle: TAB_BAR_STYLE });
-  }, [navigation, deleteModeActive]);
 
   const selectCompany = (ruleId, company) => {
     updateRule(ruleId, 'selectedCompany', company);
@@ -559,106 +556,62 @@ export default function Setting() {
   };
 
   return (
-    <View style={[styles.container, { width: screenWidth }]}>
-      <ScrollView
-        horizontal={false}
-        bounces={false}
-        overScrollMode="never"
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.content,
-          {
-            width: screenWidth,
-            paddingBottom: Math.max(insets.bottom, 18) + 8 + 58 + 20 * uiScale,
-          },
-        ]}
-      >
-        <View
-          style={[
-            styles.form,
-            {
-              width: screenWidth,
-              paddingTop: screenHeight * 0.085,
-            },
-          ]}
+    <View style={[styles.root, { width: screenWidth }]}>
+      {rules.map((rule, index) => (
+        <SwipeToDelete
+          key={rule.id}
+          width={screenWidth}
+          uiScale={uiScale}
+          showDividerBefore={deleteModeActive && index === 0}
+          showDividerAfter={deleteModeActive && index < rules.length - 1}
+          showSpacingAfter={index < rules.length - 1}
+          onDelete={() => removeRule(rule.id)}
+          resetSignal={swipeResetSignal}
+          onOpenChange={(isOpen) => {
+            setDeleteModeActive(isOpen);
+          }}
         >
-          {rules.map((rule, index) => (
-            <SwipeToDelete
-              key={rule.id}
-              width={screenWidth}
-              uiScale={uiScale}
-              showDividerBefore={deleteModeActive && index === 0}
-              showDividerAfter={deleteModeActive && index < rules.length - 1}
-              showSpacingAfter={index < rules.length - 1}
-              onDelete={() => removeRule(rule.id)}
-              resetSignal={swipeResetSignal}
-              onOpenChange={(isOpen) => {
-                if (isOpen) {
-                  setDeleteModeActive(true);
-                  setOpenSwipeId(rule.id);
-                } else {
-                  setOpenSwipeId((current) => (current === rule.id ? null : current));
-                }
-              }}
-            >
-              <RuleForm
-                rule={rule}
-                uiScale={uiScale}
-                contentWidth={contentWidth}
-                inputWidth={inputWidth}
-                dateInputWidth={dateInputWidth}
-                textSize={textSize}
-                pickerWidth={pickerWidth}
-                pickerHeight={pickerHeight}
-                menuWidth={menuWidth}
-                isDeleteMode={deleteModeActive}
-                menuOpen={openDropdown?.ruleId === rule.id}
-                showSpacingAfter={false}
-                onUpdate={updateRule}
-                onToggleMenu={(anchor) =>
-                  setOpenDropdown((current) => {
-                    if (current?.ruleId === rule.id) {
-                      return null;
-                    }
-                    return { ruleId: rule.id, anchor };
-                  })
-                }
-                onSelectCompany={selectCompany}
-              />
-            </SwipeToDelete>
-          ))}
+          <RuleForm
+            rule={rule}
+            uiScale={uiScale}
+            contentWidth={contentWidth}
+            inputWidth={inputWidth}
+            dateInputWidth={dateInputWidth}
+            textSize={textSize}
+            pickerWidth={pickerWidth}
+            pickerHeight={pickerHeight}
+            screenWidth={screenWidth}
+            isDeleteMode={deleteModeActive}
+            menuOpen={openDropdown?.ruleId === rule.id}
+            onUpdate={updateRule}
+            onToggleMenu={(anchor) =>
+              setOpenDropdown((current) => {
+                if (current?.ruleId === rule.id) return null;
+                return { ruleId: rule.id, anchor };
+              })
+            }
+          />
+        </SwipeToDelete>
+      ))}
 
-          {!deleteModeActive ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="新增設定"
-              onPress={addRule}
-              style={[styles.addRuleButton, { width: contentWidth, height: 80 * uiScale, marginTop: 38 * uiScale }]}
-            >
-              <Text style={[styles.addRuleText, { fontSize: 26 * uiScale }]}>
-                +
-              </Text>
-            </Pressable>
-          ) : null}
-        </View>
-      </ScrollView>
+      {!deleteModeActive ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="新增設定"
+          onPress={addRule}
+          style={[styles.addRuleButton, { width: contentWidth, height: 80 * uiScale, marginTop: 38 * uiScale }]}
+        >
+          <Text style={[styles.addRuleText, { fontSize: 26 * uiScale }]}>+</Text>
+        </Pressable>
+      ) : null}
 
       {deleteModeActive ? (
-        <View
-          pointerEvents="box-none"
-          style={[styles.swipeCancelLayer, { paddingBottom: Math.max(insets.bottom, 18) + 18 }]}
-        >
+        <View pointerEvents="box-none" style={styles.swipeCancelLayer}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="取消刪除"
             onPress={cancelSwipe}
-            style={[
-              styles.swipeCancelButton,
-              {
-                width: Math.min(screenWidth * 0.86, 420),
-                height: 44,
-              },
-            ]}
+            style={[styles.swipeCancelButton, { width: Math.min(screenWidth * 0.86, 420), height: 44 }]}
           >
             <Text style={[styles.swipeCancelText, { fontSize: 24 * uiScale }]}>取消</Text>
           </Pressable>
@@ -698,20 +651,10 @@ export default function Setting() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#2E2F2E',
-  },
-  screenScroll: {
-    flex: 1,
-    width: '100%',
-  },
-  content: {
-    flexGrow: 1,
+  root: {
+    position: 'relative',
     alignItems: 'center',
-  },
-  form: {
-    marginTop: 0,
+    overflow: 'visible',
   },
   swipeRow: {
     position: 'relative',
@@ -835,8 +778,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(217, 217, 217, 1)',
     backgroundColor: 'rgba(217, 217, 217, 0.3)',
-    boxShadow:
-      '2px 2px 4px rgba(0, 0, 0, 0.2)',
+    boxShadow: '2px 2px 4px rgba(0, 0, 0, 0.2)',
   },
   companyOptionPressed: {
     borderColor: '#D9D9D9',
@@ -950,7 +892,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 4,
   },
   addRuleButton: {
-    width: '100%',
     alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',

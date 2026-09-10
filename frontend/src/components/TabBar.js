@@ -1,7 +1,8 @@
 import React from 'react';
-import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LocalSvg } from 'react-native-svg/css';
+import useViewportDimensions from '../hooks/useViewportDimensions';
 
 export const TAB_BAR_STYLE = {
   backgroundColor: 'transparent',
@@ -24,7 +25,7 @@ const ICON_SIZE = 32;
 
 export default function TabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width } = useViewportDimensions();
   const focusedOptions = descriptors[state.routes[state.index].key].options;
   const tabBarStyle = focusedOptions.tabBarStyle;
 
@@ -37,9 +38,9 @@ export default function TabBar({ state, descriptors, navigation }) {
   const bottomInset = Math.max(insets.bottom, 18) + 8;
   const barWidth = Math.min(width * BAR_WIDTH_RATIO, MAX_BAR_WIDTH);
   const tabWidth = barWidth / state.routes.length;
-  // Keep the selected pill aligned with the actual active tab. Setting is
-  // the first tab, so it should remain selected when the Setting screen is
-  // open instead of falling back to Home.
+  // Keep the selected pill aligned with the actual active tab. The tab order
+  // is Compare / Analyze / Home / Setting, so the gear remains selected on
+  // the combined account-and-settings page.
   const focusedIndex = state.index;
   const pillWidth = tabWidth;
   const pillHeight = BAR_HEIGHT - PILL_INSET * 2;
@@ -48,7 +49,11 @@ export default function TabBar({ state, descriptors, navigation }) {
   return (
     <View
       pointerEvents="box-none"
-      style={[styles.wrap, { paddingBottom: bottomInset }]}
+      style={[
+        styles.wrap,
+        Platform.OS === 'web' && styles.webViewportWrap,
+        { width, paddingBottom: bottomInset },
+      ]}
     >
       <View style={[styles.bar, { width: barWidth, height: BAR_HEIGHT }]}>
         <View
@@ -124,10 +129,18 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+    width: '100%',
+    alignSelf: 'stretch',
     alignItems: 'center',
     backgroundColor: 'transparent',
     zIndex: 100,
     elevation: 100,
+  },
+  webViewportWrap: {
+    position: 'fixed',
+    left: 0,
+    right: 0,
+    width: '100vw',
   },
   bar: {
     position: 'relative',

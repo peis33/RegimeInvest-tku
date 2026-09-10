@@ -6,8 +6,8 @@ import {
   Text,
   TextInput,
   View,
-  useWindowDimensions,
 } from 'react-native';
+import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const GROUP_LIST_LAYOUT = [
   { symbol: '2002', left: 192.5, top: 88.6991, width: 115 },
@@ -42,7 +42,7 @@ export default function GroupListModal({
   selectedSymbols = [],
   onConfirm,
 }) {
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth } = useViewportDimensions();
   const groupListWidth = Math.min(500, screenWidth * 0.82);
   const groupListHeight = groupListWidth * (557 / 500);
   const groupListScale = groupListWidth / 500;
@@ -252,8 +252,8 @@ export default function GroupListModal({
 
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="取消建立群組"
-            onPress={onClose}
+            accessibilityLabel="清空目前所選"
+            onPress={() => setDraftSelectedSymbols([])}
             style={({ pressed }) => [
               styles.cancelButton,
               {

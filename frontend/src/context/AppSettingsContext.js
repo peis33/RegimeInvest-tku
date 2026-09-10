@@ -9,7 +9,15 @@ import React, {
 
 const AppSettingsContext = createContext(null);
 
-export function AppSettingsProvider({ children }) {
+export function AppSettingsProvider({
+  children,
+  investmentResult = null,
+  investmentRunPending = false,
+  investmentRunError = null,
+  discussionRunPending = false,
+  discussionRunError = null,
+  startDiscussion = null,
+}) {
   const [actionWindowEnabled, setActionWindowEnabled] = useState(true);
   const [customGroups, setCustomGroups] = useState([]);
   const customGroupSequence = useRef(0);
@@ -52,6 +60,12 @@ export function AppSettingsProvider({ children }) {
     () => ({
       actionWindowEnabled,
       setActionWindowEnabled,
+      investmentResult,
+      investmentRunPending,
+      investmentRunError,
+      discussionRunPending,
+      discussionRunError,
+      startDiscussion,
       customGroups,
       addCustomGroup,
       updateCustomGroup,
@@ -59,6 +73,12 @@ export function AppSettingsProvider({ children }) {
     }),
     [
       actionWindowEnabled,
+      investmentResult,
+      investmentRunPending,
+      investmentRunError,
+      discussionRunPending,
+      discussionRunError,
+      startDiscussion,
       customGroups,
       addCustomGroup,
       updateCustomGroup,

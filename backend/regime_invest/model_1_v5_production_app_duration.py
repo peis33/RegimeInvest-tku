@@ -486,12 +486,129 @@ def load_model1_2026_csv():
         ]
     ]
 
+
+def load_csv_mode_data():
+    """
+    CSV 模式的完整資料來源：
+
+    1. 加權指數2014-2025.csv：既有歷史資料
+    2. 加權指數2026.csv：使用者後續手動追加或替換的 2026 資料
+
+    兩個檔案先透過共用 CSV loader 統一欄位、數值與日期格式，
+    再合併供 Frozen Model 1 使用。這裡不呼叫 TEJ API；TEJ 仍保留
+    在 hybrid 模式作為另一種可選資料來源。
+    """
+
+    print("Loading Model 1 CSV data: 2014-2025 CSV + 2026 CSV")
+
+    for path in (CSV_PATH, FUTURE_2026_CSV):
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"找不到 CSV 資料檔：{path}"
+            )
+
+    historical = base.load_csv_data(CSV_PATH)
+    future_2026 = base.load_csv_data(FUTURE_2026_CSV)
+
+    if historical.empty:
+        raise ValueError("2014-2025 Model 1 CSV data 為空。")
+
+    if future_2026.empty:
+        raise ValueError("2026 Model 1 CSV data 為空。")
+
+    # 兩個來源的責任範圍要清楚分開，避免手動更新時不小心
+    # 把重複日期或其他年度資料帶入正式模型。
+    if historical["date"].max() >= pd.Timestamp("2026-01-01"):
+        raise ValueError(
+            "2014-2025 CSV 不應包含 2026 或更新日期，"
+            "請將 2026 資料放入加權指數2026.csv。"
+        )
+
+    boundary_date = pd.Timestamp("2025-12-31")
+    invalid_future_dates = future_2026[
+        (
+            future_2026["date"] < pd.Timestamp("2026-01-01")
+        )
+        & (future_2026["date"] != boundary_date)
+    ]
+    if (
+        not invalid_future_dates.empty
+        or future_2026["date"].max() >= pd.Timestamp("2027-01-01")
+    ):
+        raise ValueError(
+            "加權指數2026.csv 必須只包含 2026-01-01 至 2026-12-31 的資料。"
+            "檔案可保留一筆 2025-12-31 作為跨檔案銜接列。"
+        )
+
+    # 部分手動匯出的 2026 檔案會附帶 2025-12-31 作為銜接列；
+    # 這一列不屬於 2026 Model 1 來源，避免和歷史 CSV 重複或因單位
+    # 格式不同造成同一天資料互相覆蓋。
+    future_2026 = future_2026[
+        (future_2026["date"] >= pd.Timestamp("2026-01-01"))
+        & (future_2026["date"] < pd.Timestamp("2027-01-01"))
+    ].copy()
+
+    if future_2026.empty:
+        raise ValueError("2026 Model 1 CSV data 為空。")
+
+    # 2014-2025 合併檔沿用舊 CSV 的外資欄位尺度；目前 2026 匯出檔
+    # 使用與 TEJ qfii_p 相同、縮小 1,000 倍的尺度。CSV 模式要在合併
+    # 前轉回歷史 CSV 尺度，避免 2025/2026 交界產生不合理的特徵跳變。
+    future_2026["foreign_net_buy"] = (
+        future_2026["foreign_net_buy"] * 1000.0
+    )
+
+    duplicate_dates = set(historical["date"]).intersection(
+        set(future_2026["date"])
+    )
+    if duplicate_dates:
+        duplicate_text = ", ".join(
+            str(value.date())
+            for value in sorted(duplicate_dates)
+        )
+        raise ValueError(
+            "2014-2025 CSV 與 2026 CSV 有重複交易日："
+            f"{duplicate_text}"
+        )
+
+    raw_columns = [
+        "date",
+        "volume",
+        "turnover_value",
+        "foreign_net_buy",
+        "short_balance",
+        "margin_balance",
+    ]
+
+    combined = (
+        pd.concat(
+            [historical[raw_columns], future_2026[raw_columns]],
+            ignore_index=True,
+        )
+        .sort_values("date")
+        .drop_duplicates(subset=["date"], keep="last")
+        .reset_index(drop=True)
+    )
+
+    print(
+        "CSV period: "
+        f"{combined['date'].min().date()} ~ "
+        f"{combined['date'].max().date()} "
+        f"({len(combined):,} rows)"
+    )
+    print(
+        "CSV sources: "
+        f"{CSV_PATH} + {FUTURE_2026_CSV}"
+    )
+
+    return combined
+
 def load_input_data():
     """
     Model 1 data-source layer.
 
     csv:
-        保留原本 Frozen CSV baseline。
+        2014~2025 歷史 CSV + 使用者手動維護的 2026 CSV。
 
     hybrid:
         2014~2024 -> historical CSV
@@ -504,16 +621,10 @@ def load_input_data():
     """
 
     # ==================================================
-    # MODE 1: Original Frozen CSV baseline
+    # MODE 1: Local CSV production source
     # ==================================================
     if DATA_SOURCE == "csv":
-        if not os.path.exists(CSV_PATH):
-            raise FileNotFoundError(
-                f"找不到資料檔：{CSV_PATH}\n"
-                "請把 CSV 放在專案根目錄，或設定 HISTORY_CSV_PATH。"
-            )
-
-        return base.load_csv_data(CSV_PATH)
+        return load_csv_mode_data()
 
     # ==================================================
     # MODE 2: Hybrid production data source
@@ -1511,7 +1622,7 @@ def main():
             "pipeline_version": PIPELINE_VERSION,
             "data_source": DATA_SOURCE,
             "source_file": (
-                CSV_PATH
+                f"{CSV_PATH} + {FUTURE_2026_CSV}"
                 if DATA_SOURCE == "csv"
                 else "TEJ_API"
             ),

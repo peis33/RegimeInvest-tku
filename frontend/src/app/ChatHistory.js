@@ -6,15 +6,15 @@ import {
   StyleSheet,
   Text,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import AssetSvg from '../components/AssetSvg';
 import { fetchLatestInvestment } from '../services/investmentApi';
+import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const CANCEL_IMAGE = require('../assets/image/cancel.svg');
-const JUDGE_IMAGE = require('../assets/image/judge.svg');
-const RISK_SEEKING_IMAGE = require('../assets/image/risk-seeking.svg');
-const RISK_AVERSE_IMAGE = require('../assets/image/risk-averse.svg');
+const JUDGE_IMAGE = require('../assets/image/Llama.svg');
+const RISK_SEEKING_IMAGE = require('../assets/image/Qwen.svg');
+const RISK_AVERSE_IMAGE = require('../assets/image/Mistral.svg');
 
 const DESIGN_WIDTH = 436;
 
@@ -226,20 +226,27 @@ function MessageDetails({ message, layoutScale }) {
 }
 
 function ChatHistory({ onBack, style, initialData }) {
-  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const [data, setData] = React.useState(initialData || null);
   const [loading, setLoading] = React.useState(!initialData);
   const [error, setError] = React.useState(null);
   const [expandedMessageIds, setExpandedMessageIds] = React.useState({});
 
   React.useEffect(() => {
-    if (initialData) {
+    // Model 1/2 data may be passed in before Model 3 has finished.  Only
+    // skip the request when the supplied object actually contains the
+    // discussion record; otherwise fetch the latest backend result.
+    if (initialData?.discussion) {
       setData(initialData);
+      setError(null);
       setLoading(false);
       return undefined;
     }
 
     let active = true;
+    if (initialData) {
+      setData(initialData);
+    }
     setLoading(true);
 
     fetchLatestInvestment()
@@ -378,7 +385,7 @@ function ChatHistory({ onBack, style, initialData }) {
   };
 
   return (
-    <View style={[styles.container, style]}>
+    <View style={[styles.container, style, { width: screenWidth }]}>
       <View
         style={[
           styles.header,
@@ -415,9 +422,13 @@ function ChatHistory({ onBack, style, initialData }) {
       </View>
 
       <ScrollView
+        horizontal={false}
+        bounces={false}
+        overScrollMode="never"
         showsVerticalScrollIndicator={false}
         style={[styles.historyScroll, { width: contentWidth }]}
         contentContainerStyle={{
+          width: contentWidth,
           paddingTop: 25 * layoutScale,
           paddingBottom: 36 * layoutScale,
         }}

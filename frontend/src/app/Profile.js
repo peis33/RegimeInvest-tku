@@ -8,15 +8,16 @@ import {
   Text,
   TextInput,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import AssetSvg from '../components/AssetSvg';
+import TriggerRulesSection from '../components/TriggerRulesSection';
 import { TAB_BAR_STYLE } from '../components/TabBar';
 import CustomGroupName from './CustomGroupName';
 import { useAppSettings } from '../context/AppSettingsContext';
+import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const DROPDOWN_ARROW_IMAGE = require('../assets/image/DropdownArrow.svg');
 const PROFILE_PHOTO_IMAGE = require('../assets/image/ProfilePhoto.svg');
@@ -149,11 +150,9 @@ function Avatar({ imageUri, size }) {
 export default function Profile() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const { actionWindowEnabled, setActionWindowEnabled } = useAppSettings();
   const scale = Math.min(Math.max(screenWidth / 457, 0.85), 1.35);
-  const canvasHeight = Math.max(screenHeight, 920 * scale);
-  const [alertEnabled, setAlertEnabled] = useState(true);
   const [showCustomGroupName, setShowCustomGroupName] = useState(false);
   const [openMenu, setOpenMenu] = useState(null);
   const [defaultGroup, setDefaultGroup] = useState('');
@@ -162,6 +161,12 @@ export default function Profile() {
   const [profileName, setProfileName] = useState('');
   const [draftName, setDraftName] = useState('');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [ruleCount, setRuleCount] = useState(1);
+  const [ruleDeleteMode, setRuleDeleteMode] = useState(false);
+  const canvasHeight = Math.max(
+    screenHeight,
+    (900 + ruleCount * 470) * scale,
+  );
 
   const handleChangePhoto = async () => {
     try {
@@ -206,21 +211,31 @@ export default function Profile() {
 
   useEffect(() => {
     navigation.setOptions({
-      tabBarStyle: showCustomGroupName ? { display: 'none' } : TAB_BAR_STYLE,
+      tabBarStyle: showCustomGroupName || ruleDeleteMode
+        ? { display: 'none' }
+        : TAB_BAR_STYLE,
     });
 
     return () => navigation.setOptions({ tabBarStyle: TAB_BAR_STYLE });
-  }, [navigation, showCustomGroupName]);
+  }, [navigation, ruleDeleteMode, showCustomGroupName]);
 
   if (showCustomGroupName) {
     return <CustomGroupName onBack={() => setShowCustomGroupName(false)} />;
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { width: screenWidth }]}>
       <ScrollView
+        style={styles.screenScroll}
+        horizontal={false}
+        bounces={false}
+        overScrollMode="never"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ minHeight: canvasHeight, paddingBottom: insets.bottom + 82 * scale }}
+        contentContainerStyle={{
+          width: screenWidth,
+          minHeight: canvasHeight,
+          paddingBottom: insets.bottom + 82 * scale,
+        }}
       >
         <View style={[styles.canvas, { width: screenWidth, height: canvasHeight }]}>
           <View
@@ -334,26 +349,21 @@ export default function Profile() {
               styles.profileSettings,
               {
                 top: 518 * scale,
-                height: 240 * scale,
+                height: 170 * scale,
               },
             ]}
           >
-            <View style={[styles.settingRow, { top: 0, paddingLeft: 58 * scale, paddingRight: 46 * scale }]}> 
-              <Text style={[styles.settingLabel, { fontSize: 21 * scale }]}>觸價警示通知</Text>
-              <Toggle value={alertEnabled} onPress={() => setAlertEnabled((current) => !current)} scale={scale} />
-            </View>
-
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="更改自訂群組命名"
               onPress={() => setShowCustomGroupName(true)}
-              style={[styles.settingRow, { top: 58 * scale, paddingLeft: 50 * scale, paddingRight: 45 * scale }]}
+              style={[styles.settingRow, { top: 0, paddingLeft: 50 * scale, paddingRight: 45 * scale }]}
             >
               <Text style={[styles.settingLabel, { fontSize: 21 * scale }]}>更改自訂群組命名</Text>
               <Text style={[styles.chevron, { fontSize: 40 * scale }]}>›</Text>
             </Pressable>
 
-            <View style={[styles.settingRow, { top: 112 * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}> 
+            <View style={[styles.settingRow, { top: 58 * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
               <Text style={[styles.settingLabel, { fontSize: 21 * scale }]}>預設股票群組</Text>
               <ProfileDropdown
                 scale={scale}
@@ -362,7 +372,7 @@ export default function Profile() {
               />
             </View>
 
-            <View style={[styles.settingRow, { top: 182 * scale, paddingLeft: 50 * scale, paddingRight: 53 * scale }]}> 
+            <View style={[styles.settingRow, { top: 112 * scale, paddingLeft: 50 * scale, paddingRight: 53 * scale }]}>
               <Text style={[styles.settingLabel, { fontSize: 21 * scale }]}>行動窗口</Text>
               <Toggle
                 value={actionWindowEnabled}
@@ -381,6 +391,13 @@ export default function Profile() {
               }}
             />
           ) : null}
+
+          <View style={[styles.triggerRules, { top: 700 * scale }]}>
+            <TriggerRulesSection
+              onRuleCountChange={setRuleCount}
+              onDeleteModeChange={setRuleDeleteMode}
+            />
+          </View>
         </View>
       </ScrollView>
     </View>
@@ -391,6 +408,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#2E2F2E',
+  },
+  screenScroll: {
+    flex: 1,
+    width: '100%',
   },
   canvas: {
     position: 'relative',
@@ -466,6 +487,12 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
   },
+  triggerRules: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 4,
+  },
   settingRow: {
     position: 'absolute',
     left: 0,
@@ -497,7 +524,7 @@ const styles = StyleSheet.create({
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(217, 217, 217, 0.3)',
+    backgroundColor: '#7B828B',
     boxShadow: 'inset -4px -4px 4px rgba(255, 255, 255, 0.25), inset 6px 6px 4px rgba(0, 0, 0, 0.25)',
   },
   profileDropdownBorder: {
@@ -507,7 +534,7 @@ const styles = StyleSheet.create({
     bottom: 1,
     left: 1,
     borderWidth: 0.5,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
+    borderColor: '#5E6E7F',
   },
   profileDropdownText: {
     position: 'absolute',

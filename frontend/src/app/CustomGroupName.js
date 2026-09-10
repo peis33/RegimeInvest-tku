@@ -6,23 +6,23 @@ import {
   Text,
   TextInput,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AssetSvg from '../components/AssetSvg';
 import { useAppSettings } from '../context/AppSettingsContext';
+import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const BACK_IMAGE = require('../assets/image/back.svg');
 
 export default function CustomGroupName({ onBack }) {
   const insets = useSafeAreaInsets();
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth } = useViewportDimensions();
   const scale = Math.min(Math.max(screenWidth / 553, 0.85), 1.35);
   const { customGroups, renameCustomGroup } = useAppSettings();
   const titleBarHeight = 112 * scale + insets.top;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { width: screenWidth }]}>
       <View style={[styles.titleBar, { height: titleBarHeight }]}>
         <Pressable
           accessibilityRole="button"
@@ -56,11 +56,15 @@ export default function CustomGroupName({ onBack }) {
       </View>
 
       <ScrollView
+        horizontal={false}
+        bounces={false}
+        overScrollMode="never"
         showsVerticalScrollIndicator={false}
         style={[styles.groupsScroll, { top: titleBarHeight }]}
         contentContainerStyle={[
           styles.groupsContent,
           {
+            width: screenWidth,
             paddingTop: 51 * scale,
             paddingBottom: 40 * scale + insets.bottom,
             paddingHorizontal: 27 * scale,

@@ -42,6 +42,9 @@ yarn-error.*
 
 # Python backend
 backend/.venv312/
+backend/.venv314/
+backend/.python312embed/
+backend/.tools/
 **/__pycache__/
 *.py[cod]
 **/.env
@@ -49,6 +52,7 @@ backend/.venv312/
 # RegimeInvest generated outputs
 backend/regime_invest/model_1_prediction_output.csv
 backend/regime_invest/model_1_production_metadata.csv
+backend/regime_invest/model_1_cache_manifest.json
 backend/regime_invest/model_2_candidate_stocks.csv
 backend/regime_invest/portfolio_allocation_output.csv
 backend/regime_invest/model_2_v2_strong_final_portfolio_audit.csv
@@ -58,5 +62,6 @@ backend/regime_invest/model_3_v5_1_production_report.txt
 backend/regime_invest/model_3_v5_1_production_audit.csv
 backend/regime_invest/end_to_end_app_pipeline_audit.csv
 backend/regime_invest/end_to_end_app_pipeline_report.txt
+backend/regime_invest/model_3_runtime_status.json
 backend/regime_invest/experiment_model_2_candidate_selection_audit.csv
 backend/regime_invest/experiment_model_2_candidate_selection_summary.csv

@@ -5,7 +5,6 @@ import {
   StyleSheet,
   Text,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,6 +13,7 @@ import AssetSvg from '../components/AssetSvg';
 import StockDetail from './StockDetail';
 import AddGroupMenu from '../components/AddGroupMenu';
 import GroupListModal from '../components/GroupListModal';
+import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const BACK_IMAGE = require('../assets/image/back.svg');
 const ADD_IMAGE = require('../assets/image/add.svg');
@@ -66,7 +66,7 @@ const StockCircle = React.memo(function StockCircle({ stock, size, width, onPres
 function CircleList({ onBack, style }) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const [showGroupMenu, setShowGroupMenu] = useState(false);
   const [showGroupList, setShowGroupList] = useState(false);
   const [showStockGrid, setShowStockGrid] = useState(false);
@@ -83,7 +83,7 @@ function CircleList({ onBack, style }) {
   const columnWidth = (screenWidth - horizontalPadding * 2 - columnGap) / 2;
   const circleSize = Math.min(104, Math.max(92, columnWidth - 35));
   return (
-    <View style={[styles.container, style]}>
+    <View style={[styles.container, style, { width: screenWidth }]}>
       <View style={styles.body}>
       <View
         style={[
@@ -128,10 +128,15 @@ function CircleList({ onBack, style }) {
       </View>
 
       <ScrollView
+        style={styles.screenScroll}
+        horizontal={false}
+        bounces={false}
+        overScrollMode="never"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.grid,
           {
+            width: screenWidth,
             paddingHorizontal: horizontalPadding,
             columnGap,
             paddingBottom: insets.bottom + 32,
@@ -189,6 +194,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#2E2F2E',
+  },
+  screenScroll: {
+    flex: 1,
+    width: '100%',
   },
   body: {
     flex: 1,

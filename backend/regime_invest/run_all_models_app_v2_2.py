@@ -13,6 +13,8 @@ No parameter tuning is performed here.
 
 from pathlib import Path
 from datetime import datetime
+import importlib.util
+import os
 import subprocess
 import sys
 import time
@@ -80,6 +82,34 @@ STAGES = [
 AUDIT_FILE = BASE / "end_to_end_app_pipeline_audit.csv"
 REPORT_FILE = BASE / "end_to_end_app_pipeline_report.txt"
 
+MODEL_DEPENDENCIES = {
+    "model_1_v5_production_app_duration.py": (
+        "tensorflow",
+        "hmmlearn",
+        "sklearn",
+        "scipy",
+    ),
+    "model_3_v5_1_final_freeze_candidate.py": (
+        "ollama",
+    ),
+}
+
+def module_available(name):
+    """檢查目前管線使用的 Python 是否能找到指定套件。"""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
+def missing_stage_dependencies(stage):
+    """列出階段缺少的套件；缺少時必須直接停止，不使用舊輸出。"""
+    return [
+        name
+        for name in MODEL_DEPENDENCIES.get(stage["script"], ())
+        if not module_available(name)
+    ]
+
 
 def add(audit, stage, check, ok, detail):
     audit.append({
@@ -137,7 +167,8 @@ def validate_profile(audit):
         "investor_type": investor_type,
         "risk_preference": risk,
         "budget": budget,
-        "allow_fractional": bool(raw.get("allow_fractional", False)),
+        # 與登入頁及 Model 2 的預設一致：未省略設定時允許零股。
+        "allow_fractional": bool(raw.get("allow_fractional", True)),
     }
 
 
@@ -261,9 +292,9 @@ def validate_model3_app(audit):
     )
     return ok
 
-def run_stage(index, stage, audit):
+def run_stage(index, stage, audit, total_stages=None):
     print("\n" + "=" * 118)
-    print(f"[{index}/{len(STAGES)}] {stage['name']}")
+    print(f"[{index}/{total_stages or len(STAGES)}] {stage['name']}")
     print("=" * 118)
 
     script = BASE / stage["script"]
@@ -279,6 +310,31 @@ def run_stage(index, stage, audit):
         if not ok:
             print("STOP: missing required input:", name)
             return False, 0.0
+
+    missing_dependencies = missing_stage_dependencies(stage)
+    if missing_dependencies:
+        dependency_text = ", ".join(missing_dependencies)
+        message = (
+            f"缺少模型依賴：{dependency_text}。"
+            "不使用舊輸出，已停止本次管線。"
+        )
+        print("\nDEPENDENCY_CHECK_FAILED: " + dependency_text)
+        print(message)
+        add(
+            audit,
+            stage["name"],
+            "Model dependencies available",
+            False,
+            dependency_text,
+        )
+        add(
+            audit,
+            stage["name"],
+            "Process return code",
+            False,
+            "not started because model dependencies are missing",
+        )
+        return False, 0.0
 
     start = time.time()
     result = subprocess.run([sys.executable, str(script)], cwd=str(BASE), check=False)
@@ -305,6 +361,25 @@ def run_stage(index, stage, audit):
 def main():
     audit = []
     start_all = time.time()
+    run_model3 = os.getenv("STOCKAPP_RUN_MODEL3", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    reuse_model1 = os.getenv("STOCKAPP_REUSE_MODEL1", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    available_stages = STAGES if run_model3 else STAGES[:3]
+    active_stages = [
+        stage
+        for stage in available_stages
+        if not (
+            reuse_model1
+            and stage["script"] == "model_1_v5_production_app_duration.py"
+        )
+    ]
 
     print("=" * 118)
     print("APP PRODUCTION — RUN ALL MODELS v2.2")
@@ -313,7 +388,16 @@ def main():
     print("Model 1 market state + duration/MTA")
     print(" -> Model 2 candidate selection")
     print(" -> Model 2 personalized V2 Strong allocation")
-    print(" -> Model 3 multi-agent discussion/Judge")
+    print(
+        " -> Model 3 multi-agent discussion/Judge"
+        if run_model3
+        else " -> Model 3 skipped (可由獨立 API 手動啟動)"
+    )
+    print(
+        "Model 1: reuse cached output (CSV sources unchanged)"
+        if reuse_model1
+        else "Model 1: run production training/inference"
+    )
     print()
 
     profile = validate_profile(audit)
@@ -328,33 +412,78 @@ def main():
     print(f"- budget          : {profile['budget']:.2f}")
     print(f"- allow_fractional: {profile['allow_fractional']}")
 
+    if reuse_model1:
+        # 即使來源檔案沒有變更，仍要確認目前這個 Python 環境具備
+        # Model 1 依賴；缺少依賴時不能默默沿用舊市場狀態。
+        model1_stage = STAGES[0]
+        missing_dependencies = missing_stage_dependencies(model1_stage)
+        if missing_dependencies:
+            dependency_text = ", ".join(missing_dependencies)
+            add(
+                audit,
+                model1_stage["name"],
+                "Model dependencies available",
+                False,
+                dependency_text,
+            )
+            add(
+                audit,
+                model1_stage["name"],
+                "Cached output reuse allowed",
+                False,
+                "not reused because Model 1 dependencies are missing",
+            )
+            save_audit(audit)
+            print(
+                "\nSTOP: Model 1 cached output cannot be reused because "
+                f"dependencies are missing: {dependency_text}"
+            )
+            return 1
+
+        if not validate_model1(audit):
+            save_audit(audit)
+            print("\nSTOP: cached Model 1 output audit failed; no reuse.")
+            return 1
+
+        add(
+            audit,
+            model1_stage["name"],
+            "Cached Model 1 output reused",
+            True,
+            "CSV source signatures unchanged",
+        )
+
     times = {}
-    for i, stage in enumerate(STAGES, 1):
-        ok, sec = run_stage(i, stage, audit)
+    for i, stage in enumerate(active_stages, 1):
+        ok, sec = run_stage(i, stage, audit, len(active_stages))
         times[stage["name"]] = sec
         save_audit(audit)
         if not ok:
             print("\nEND-TO-END APP PIPELINE: FAIL")
             return 1
 
-        if i == 1 and not validate_model1(audit):
+        if stage["script"] == "model_1_v5_production_app_duration.py" and not validate_model1(audit):
             save_audit(audit)
             print("\nSTOP: Model 1 App interface audit failed.")
             return 1
 
-        if i == 3 and not validate_model2_profile(audit, profile):
+        if stage["script"] == "model_2_v2_strong_production_app_profile.py" and not validate_model2_profile(audit, profile):
             save_audit(audit)
             print("\nSTOP: Model 2 App profile propagation audit failed.")
             return 1
 
-        if i == 4 and not validate_model3_app(audit):
+        if stage["script"] == "model_3_v5_1_final_freeze_candidate.py" and not validate_model3_app(audit):
             save_audit(audit)
             print("\nSTOP: Model 3 App discussion interface audit failed.")
             return 1
 
     total = time.time() - start_all
     add(audit, "End-to-End", "All App production stages completed", True,
-        "Model 1 -> Model 2 Selection -> Model 2 App Profile -> Model 3")
+        (
+            "Model 1 -> Model 2 Selection -> Model 2 App Profile -> Model 3"
+            if run_model3
+            else "Model 1 -> Model 2 Selection -> Model 2 App Profile; Model 3 skipped"
+        ))
     save_audit(audit)
 
     m1 = pd.read_csv(BASE / "model_1_prediction_output.csv").iloc[-1]
@@ -370,6 +499,7 @@ def main():
         f"budget={profile['budget']:.2f}",
         "",
         "MODEL 1 APP MARKET STATUS",
+        f"model_1_reused={reuse_model1}",
         f"target_month={m1['target_month']}",
         f"predicted_regime={m1['predicted_regime']}",
         f"prob_Bear={float(m1['prob_Bear']):.6f}",
@@ -383,7 +513,11 @@ def main():
         f"weight_sum={portfolio['final_weight'].sum():.12f}",
         "",
         "MODEL 3",
-        "discussion_output=model_3_v5_1_discussion_output.json",
+        (
+            "discussion_output=model_3_v5_1_discussion_output.json"
+            if run_model3
+            else "discussion_output=not_run; no previous discussion reused"
+        ),
         "",
         f"TOTAL ELAPSED={total:.1f}s",
         "FINAL RESULT: END-TO-END APP PIPELINE PASS",
