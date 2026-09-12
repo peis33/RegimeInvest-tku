@@ -335,7 +335,7 @@ function RoundChat({
           contentContainerStyle={[ 
             styles.previewContent,
             {
-              width: screenWidth,
+              width,
               paddingHorizontal: 14 * layoutScale,
               paddingTop: 16 * layoutScale,
             },

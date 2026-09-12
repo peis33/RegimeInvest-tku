@@ -601,7 +601,7 @@ export function MarginChart({ data, width }) {
       label={`融資融券變化 ${points.length} 日`}
     >
       <Rect width={VIEW_WIDTH} height={DETAIL_HEIGHT} fill={CHART_COLORS.background} />
-      <ChartTitle>融資融券變化（近{points.length}日）</ChartTitle>
+      <ChartTitle>融資融券變化（千元，近{points.length}日）</ChartTitle>
       <LegendItem x={250} y={31} color={CHART_COLORS.margin} label="融資餘額" />
       <LegendItem x={350} y={31} color={CHART_COLORS.short} label="融券餘額" />
       <ChartGrid
@@ -698,7 +698,6 @@ export function PerformanceComparisonChart({ series, width }) {
       style={[styles.compareChart, { width, height }]}
     >
       <Svg width={width} height={height} viewBox={`0 0 ${VIEW_WIDTH} ${COMPARISON_HEIGHT}`}>
-        <Rect width={VIEW_WIDTH} height={COMPARISON_HEIGHT} fill="#212121" />
         <SvgText x={14} y={20} fill="#F1F1F1" fontSize={12} fontFamily="Goldman">
           漲跌幅比較（基準日 0%）
         </SvgText>
@@ -792,14 +791,14 @@ const styles = StyleSheet.create({
   compareChart: {
     overflow: 'hidden',
     borderRadius: 16,
-    backgroundColor: '#212121',
+    backgroundColor: 'transparent',
   },
   compareChartEmpty: {
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
     borderRadius: 16,
-    backgroundColor: '#212121',
+    backgroundColor: 'transparent',
   },
   compareChartEmptyText: {
     color: '#A7A7A7',

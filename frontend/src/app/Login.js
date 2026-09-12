@@ -7,6 +7,7 @@ import {
   View,
 } from 'react-native';
 import AssetSvg from '../components/AssetSvg';
+import { useAppSettings } from '../context/AppSettingsContext';
 import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const LOGIN_BACKGROUND = '#282828';
@@ -20,17 +21,17 @@ const MENU_BACKGROUND = '#AFB7BF';
 const MENU_DIVIDER = '#5E6E7F';
 const NOTICE_IMAGE = require('../assets/image/notice.svg');
 
-const IDENTITY_OPTIONS = [
+export const IDENTITY_OPTIONS = [
   { label: '小股民', value: 'small' },
   { label: '中間戶', value: 'normal' },
   { label: '大戶', value: 'large' },
 ];
-const ALLOCATION_OPTIONS = [
+export const ALLOCATION_OPTIONS = [
   { label: '平均分散', value: 'balanced', zipfS: 0.9 },
   { label: '略為集中', value: 'moderate', zipfS: 1.2 },
   { label: '高度集中', value: 'concentrated', zipfS: 1.8 },
 ];
-const RISK_OPTIONS = [
+export const RISK_OPTIONS = [
   { label: '積極派', value: 'aggressive' },
   { label: '中立派', value: 'neutral' },
   { label: '保守派', value: 'conservative' },
@@ -265,12 +266,12 @@ function getOptionLabel(options, value, fallback) {
 
 export default function Login({ onEnter }) {
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
+  const { allowFractional, setAllowFractional } = useAppSettings();
   const [budget, setBudget] = useState('');
   const [identity, setIdentity] = useState('');
   const [allocationPreference, setAllocationPreference] = useState('');
   const [riskPreference, setRiskPreference] = useState('');
   const [topN, setTopN] = useState('');
-  const [allowFractional, setAllowFractional] = useState(true);
   const [openMenu, setOpenMenu] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 

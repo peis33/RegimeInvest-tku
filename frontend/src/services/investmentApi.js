@@ -69,6 +69,21 @@ export async function fetchLatestInvestment() {
   return parseResponse(response);
 }
 
+export async function updateAllowFractional(allowFractional) {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/settings/allow-fractional`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ allow_fractional: Boolean(allowFractional) }),
+    },
+  );
+
+  return parseResponse(response);
+}
+
 export async function fetchLatestStockDetail(stockId) {
   if (!stockId) {
     throw new Error('缺少股票代號');

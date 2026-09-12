@@ -123,6 +123,12 @@ class InvestmentProfile(BaseModel):
     zipf_s: float = Field(default=1.2, gt=0)
 
 
+class AllowFractionalUpdate(BaseModel):
+    """設定頁切換零股時使用的輕量更新請求。"""
+
+    allow_fractional: bool
+
+
 def read_csv_records(path: Path) -> list[dict]:
     if not path.exists():
         raise FileNotFoundError(path.name)
@@ -530,7 +536,7 @@ def build_stock_chart_data(
     stock_id: str,
     limit: int = 90,
 ) -> dict:
-    """把介面圖表 CSV 轉成個股三種圖表共用的時間序列。"""
+    """把 StockDetail CSV 轉成個股三種圖表共用的時間序列。"""
     matched = frame[frame["stock_id"] == stock_id].sort_values("date").copy()
     if matched.empty:
         raise KeyError(stock_id)
@@ -542,10 +548,22 @@ def build_stock_chart_data(
             window,
             min_periods=1,
         ).mean()
-    matched["margin_change"] = matched["融資餘額(張)"].diff()
-    matched["short_change"] = matched["融券餘額(張)"].diff()
+    matched["return_percent"] = close_series.pct_change(fill_method=None) * 100
+    matched["total_institutional_net"] = matched[
+        [
+            "外資買賣超(千股)",
+            "投信買賣超(千股)",
+            "自營買賣超(千股)",
+        ]
+    ].sum(axis=1, min_count=1)
     matched["institutional_cumulative"] = (
-        matched["合計買賣超(千股)"].fillna(0).cumsum()
+        matched["total_institutional_net"].fillna(0).cumsum()
+    )
+    margin_balance = matched["融資餘額(千元)"]
+    matched["short_ratio"] = (
+        matched["融券餘額(千元)"]
+        .div(margin_balance.where(margin_balance.ne(0)))
+        .mul(100)
     )
 
     recent = matched.tail(limit)
@@ -558,7 +576,7 @@ def build_stock_chart_data(
                 "high": stock_detail_number(row, "最高價(元)"),
                 "low": stock_detail_number(row, "最低價(元)"),
                 "close": stock_detail_number(row, "收盤價(元)"),
-                "returnPercent": stock_detail_number(row, "報酬率％"),
+                "returnPercent": stock_detail_number(row, "return_percent"),
                 "change": stock_detail_number(row, "股價漲跌(元)"),
                 "volume": stock_detail_number(row, "成交量(千股)"),
                 "ma5": stock_detail_number(row, "ma5"),
@@ -567,23 +585,26 @@ def build_stock_chart_data(
                 "foreignNet": stock_detail_number(row, "外資買賣超(千股)"),
                 "dealerNet": stock_detail_number(row, "自營買賣超(千股)"),
                 "investmentTrustNet": stock_detail_number(row, "投信買賣超(千股)"),
-                "totalInstitutionalNet": stock_detail_number(row, "合計買賣超(千股)"),
+                "totalInstitutionalNet": stock_detail_number(
+                    row,
+                    "total_institutional_net",
+                ),
                 "institutionalCumulative": stock_detail_number(
                     row,
                     "institutional_cumulative",
                 ),
-                "marginBalance": stock_detail_number(row, "融資餘額(張)"),
-                "shortBalance": stock_detail_number(row, "融券餘額(張)"),
-                "marginChange": stock_detail_number(row, "margin_change"),
-                "shortChange": stock_detail_number(row, "short_change"),
-                "shortRatio": stock_detail_number(row, "券資比"),
+                "marginBalance": stock_detail_number(row, "融資餘額(千元)"),
+                "shortBalance": stock_detail_number(row, "融券餘額(千元)"),
+                "marginChange": stock_detail_number(row, "融資增減(千元)"),
+                "shortChange": stock_detail_number(row, "融券增減(千元)"),
+                "shortRatio": stock_detail_number(row, "short_ratio"),
             }
         )
 
     return {
         "symbol": stock_id,
         "name": str(matched.iloc[-1]["stock_name"]),
-        "source": INTERFACE_CHART_FILE.name,
+        "source": STOCK_DETAIL_FILE.name,
         "lookback": len(points),
         "points": points,
     }
@@ -1150,6 +1171,54 @@ def health() -> dict:
     }
 
 
+@app.patch("/api/settings/allow-fractional")
+def update_allow_fractional(setting: AllowFractionalUpdate) -> dict:
+    """只保存零股設定，不重新執行完整投資模型。"""
+    if not PROFILE_FILE.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="尚未建立使用者投資設定，請先完成登入設定。",
+        )
+
+    with pipeline_lock:
+        try:
+            profile_data = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"使用者投資設定無法讀取：{exc}",
+            ) from exc
+
+        if not isinstance(profile_data, dict):
+            raise HTTPException(
+                status_code=500,
+                detail="使用者投資設定格式錯誤。",
+            )
+
+        profile_data["allow_fractional"] = setting.allow_fractional
+        try:
+            PROFILE_FILE.write_text(
+                json.dumps(profile_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            # 目前的資金配置仍是切換前的結果，避免前端誤以為已重算。
+            write_model3_status(
+                "not_started",
+                profile=profile_data,
+                message="零股設定已更新；尚未重新產生資金配置。",
+            )
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"使用者投資設定無法保存：{exc}",
+            ) from exc
+
+    return {
+        "allow_fractional": profile_data["allow_fractional"],
+        "profile": profile_data,
+    }
+
+
 @app.get("/api/stocks/{stock_id}/detail")
 def latest_stock_detail(stock_id: str) -> dict:
     """回傳指定股票在資料檔中的最新交易日行情。"""
@@ -1183,16 +1252,16 @@ def latest_stock_detail(stock_id: str) -> dict:
 def latest_stock_charts(stock_id: str, limit: int = 90) -> dict:
     """回傳指定股票近期 K 線、法人與融資融券圖表資料。"""
     try:
-        frame = read_interface_chart_frame()
+        frame = read_stock_detail_frame()
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404,
-            detail=f"找不到介面圖表資料檔：{exc}",
+            detail=f"找不到個股資料檔：{exc}",
         ) from exc
     except (UnicodeDecodeError, pd.errors.ParserError, ValueError) as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"介面圖表資料檔格式錯誤：{exc}",
+            detail=f"個股資料檔格式錯誤：{exc}",
         ) from exc
 
     normalized_id = normalize_asset_id(stock_id)

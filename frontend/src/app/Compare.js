@@ -48,9 +48,9 @@ const COMPARISON_METRICS = [
   { key: 'close', label: '收盤價', digits: 2 },
   { key: 'turnoverRate', label: '週轉率', suffix: '%', digits: 2 },
   { key: 'volume', label: '成交量', suffix: '千股', digits: 0 },
-  { key: 'rank', label: '候選排行' },
-  { key: 'weight', label: '組合占比', suffix: '%', digits: 0 },
-  { key: 'allocation', label: '分配金額', digits: 0 },
+  { key: 'rank', label: '候選排行', emptyText: '未入選' },
+  { key: 'weight', label: '組合占比', suffix: '%', digits: 0, emptyText: '未配置' },
+  { key: 'allocation', label: '分配金額', digits: 0, emptyText: '未配置' },
 ];
 
 function toNumber(value) {
@@ -158,8 +158,8 @@ function buildComparisonData(detail, investment, chartData = null) {
       turnoverRate: toNumber(detail?.turnoverRate),
       volume: toNumber(detail?.volume),
       rank: allocation.rank === null ? null : `#${allocation.rank}`,
-      weight: allocation.weight,
-      allocation: allocation.allocation,
+      weight: allocation.isCandidate ? allocation.weight : null,
+      allocation: allocation.isCandidate ? allocation.allocation : null,
     },
   };
 }
@@ -479,8 +479,8 @@ function StockResultCard({ data, width }) {
   );
 }
 
-function MetricValue({ value, suffix, digits = 0, muted = false }) {
-  let text = '--';
+function MetricValue({ value, suffix, digits = 0, emptyText = '--', muted = false }) {
+  let text = emptyText;
   if (typeof value === 'string') {
     text = value;
   } else if (value !== null && value !== undefined) {
@@ -519,13 +519,19 @@ function InstitutionCard({ data, width }) {
 export default function Compare() {
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
-  const { investmentResult } = useAppSettings();
+  const {
+    investmentResult,
+    compareGroups,
+    addCompareGroup,
+    updateCompareGroupSlot,
+    removeCompareGroup: removePersistedCompareGroup,
+  } = useAppSettings();
   const uiScale = Math.min(Math.max(screenWidth / 421, 0.85), 1.35);
+  // The reference header places the title and back control below the status
+  // bar area.  Keep the whole header content shift consistent on phones.
+  const headerContentOffset = 20 * uiScale;
   const [latestInvestment, setLatestInvestment] = useState(null);
-  const [compareGroups, setCompareGroups] = useState(() => [
-    { id: 0, slots: ['', ''] },
-  ]);
-  const nextGroupId = React.useRef(1);
+  const [addCompareLayout, setAddCompareLayout] = useState(null);
   const [started, setStarted] = useState(false);
   const [comparison, setComparison] = useState(null);
   const [loadingGroup, setLoadingGroup] = useState(null);
@@ -559,18 +565,22 @@ export default function Compare() {
   const slotWidth = Math.max(100 * uiScale, (panelInnerWidth - 10 * uiScale) / 2);
   const resultCardWidth = Math.max(132 * uiScale, (screenWidth - 56 * uiScale) / 2);
   const contentMinHeight = Math.max(screenHeight, 900 * uiScale);
+  const bottomNavigationReservedHeight = Math.max(insets.bottom, 18) + 8 + 62;
+  const bottomNavigationContentGap = 20 * uiScale;
+  const hasThirdCompareGroup = compareGroups.length >= 3;
+  const selectionContentMinHeight = hasThirdCompareGroup
+    ? screenHeight + bottomNavigationContentGap
+    : screenHeight;
+  const addCompareBottomPadding = addCompareLayout
+    ? Math.max(
+        0,
+        addCompareLayout.y + addCompareLayout.height
+          - (screenHeight - bottomNavigationReservedHeight - bottomNavigationContentGap),
+      )
+    : hasThirdCompareGroup ? bottomNavigationContentGap : 0;
 
   const updateGroupSlot = (groupId, slotIndex, value) => {
-    setCompareGroups((current) => current.map((group) => (
-      group.id === groupId
-        ? {
-            ...group,
-            slots: group.slots.map((slot, currentSlotIndex) => (
-              currentSlotIndex === slotIndex ? value : slot
-            )),
-          }
-        : group
-    )));
+    updateCompareGroupSlot(groupId, slotIndex, value);
     setError(null);
   };
 
@@ -579,12 +589,7 @@ export default function Compare() {
   };
 
   const removeCompareGroup = (groupId) => {
-    setCompareGroups((current) => {
-      const remaining = current.filter((group) => group.id !== groupId);
-      return remaining.length > 0
-        ? remaining
-        : [{ id: nextGroupId.current++, slots: ['', ''] }];
-    });
+    removePersistedCompareGroup(groupId);
     setLoadingGroup((current) => (current === groupId ? null : current));
     setError(null);
   };
@@ -651,7 +656,7 @@ export default function Compare() {
                 accessibilityRole="button"
                 accessibilityLabel="返回股票選擇"
                 onPress={goBackToSelection}
-                style={[styles.backButton, { left: 18 * uiScale, top: 40 * uiScale, padding: 4 * uiScale }]}
+                style={[styles.backButton, { left: 18 * uiScale, top: 60 * uiScale, padding: 4 * uiScale }]}
               >
                 <AssetSvg
                   asset={BACK_IMAGE}
@@ -660,7 +665,18 @@ export default function Compare() {
                   pointerEvents="none"
                 />
               </Pressable>
-              <Text style={[styles.headerTitle, { fontSize: 30 * uiScale, lineHeight: 38 * uiScale }]}>對比</Text>
+              <Text
+                style={[
+                  styles.headerTitle,
+                  {
+                    fontSize: 30 * uiScale,
+                    lineHeight: 38 * uiScale,
+                    transform: [{ translateY: headerContentOffset }],
+                  },
+                ]}
+              >
+                對比
+              </Text>
             </View>
 
             <View style={styles.resultCardsRow}>
@@ -681,38 +697,49 @@ export default function Compare() {
             </View>
 
             <View style={styles.comparisonPanel}>
-              <View style={styles.comparisonPanelHeader}>
-                <Text style={styles.comparisonHeaderSide}>{comparison[0].detail.symbol} {comparison[0].detail.name}</Text>
-                <Text style={styles.comparisonHeaderCenter}>對比內容</Text>
-                <Text style={[styles.comparisonHeaderSide, styles.rightText]}>{comparison[1].detail.symbol} {comparison[1].detail.name}</Text>
-              </View>
-              <View style={styles.candidateRow}>
-                <Text style={[styles.candidateTag, comparison[0].allocation.isCandidate ? styles.candidate : styles.notCandidate]}>
-                  {comparison[0].allocation.isCandidate ? '系統候選股' : '非候選股'}
-                </Text>
-                <View />
-                <Text style={[styles.candidateTag, comparison[1].allocation.isCandidate ? styles.candidate : styles.notCandidate]}>
-                  {comparison[1].allocation.isCandidate ? '系統候選股' : '非候選股'}
-                </Text>
+              <View style={styles.comparisonHeaderBlock}>
+                <View style={styles.comparisonPanelHeader}>
+                  <Text style={styles.comparisonHeaderSide}>{comparison[0].detail.symbol} {comparison[0].detail.name}</Text>
+                  <View style={styles.comparisonHeaderCenter} />
+                  <Text style={[styles.comparisonHeaderSide, styles.rightText]}>{comparison[1].detail.symbol} {comparison[1].detail.name}</Text>
+                </View>
+                <View style={styles.candidateRow}>
+                  <View style={styles.candidateCell}>
+                    <Text style={[styles.candidateTag, comparison[0].allocation.isCandidate ? styles.candidate : styles.notCandidate]}>
+                      {comparison[0].allocation.isCandidate ? '系統候選股' : '非候選股'}
+                    </Text>
+                  </View>
+                  <View style={styles.comparisonCenterSpacer} />
+                  <View style={styles.candidateCell}>
+                    <Text style={[styles.candidateTag, comparison[1].allocation.isCandidate ? styles.candidate : styles.notCandidate]}>
+                      {comparison[1].allocation.isCandidate ? '系統候選股' : '非候選股'}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.comparisonHeaderCenterOverlay}>對比內容</Text>
               </View>
 
-              {COMPARISON_METRICS.map((metric) => (
-                <View key={metric.key} style={styles.metricRow}>
-                  <MetricValue
-                    value={comparison[0].metrics[metric.key]}
-                    suffix={metric.suffix}
-                    digits={metric.digits}
-                    muted={comparison[0].metrics[metric.key] === null}
-                  />
-                  <Text style={styles.metricLabel}>{metric.label}</Text>
-                  <MetricValue
-                    value={comparison[1].metrics[metric.key]}
-                    suffix={metric.suffix}
-                    digits={metric.digits}
-                    muted={comparison[1].metrics[metric.key] === null}
-                  />
-                </View>
-              ))}
+              <View style={styles.comparisonMetrics}>
+                {COMPARISON_METRICS.map((metric) => (
+                  <View key={metric.key} style={styles.metricRow}>
+                    <MetricValue
+                      value={comparison[0].metrics[metric.key]}
+                      suffix={metric.suffix}
+                      digits={metric.digits}
+                      emptyText={metric.emptyText}
+                      muted={comparison[0].metrics[metric.key] === null}
+                    />
+                    <Text style={styles.metricLabel}>{metric.label}</Text>
+                    <MetricValue
+                      value={comparison[1].metrics[metric.key]}
+                      suffix={metric.suffix}
+                      digits={metric.digits}
+                      emptyText={metric.emptyText}
+                      muted={comparison[1].metrics[metric.key] === null}
+                    />
+                  </View>
+                ))}
+              </View>
             </View>
 
             <Text style={styles.institutionHeading}>三大法人</Text>
@@ -738,13 +765,28 @@ export default function Compare() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{
           width: screenWidth,
-          minHeight: contentMinHeight,
-          paddingBottom: insets.bottom + 92,
+          // 第三組開始固定保留一小段可捲動高度，確保內容不會被導覽列擋住。
+          minHeight: selectionContentMinHeight,
+          paddingBottom: Math.max(
+            addCompareBottomPadding,
+            hasThirdCompareGroup ? bottomNavigationContentGap : 0,
+          ),
         }}
       >
-        <View style={[styles.selectionPage, { minHeight: 900 * uiScale }]}>
+        <View style={styles.selectionPage}>
           <View style={[styles.header, { height: 118 * uiScale }]}>
-            <Text style={[styles.headerTitle, { fontSize: 30 * uiScale, lineHeight: 38 * uiScale }]}>對比</Text>
+            <Text
+              style={[
+                styles.headerTitle,
+                {
+                  fontSize: 30 * uiScale,
+                  lineHeight: 38 * uiScale,
+                  transform: [{ translateY: headerContentOffset }],
+                },
+              ]}
+            >
+              對比
+            </Text>
           </View>
           <View style={[styles.selectionSubtitle, { height: 47 * uiScale }]}>
             <Text style={[styles.subtitleText, { fontSize: 16 * uiScale }]}>最多比較兩股</Text>
@@ -781,10 +823,7 @@ export default function Compare() {
             accessibilityRole="button"
             accessibilityLabel="新增比較"
             onPress={() => {
-              setCompareGroups((current) => [
-                ...current,
-                { id: nextGroupId.current++, slots: ['', ''] },
-              ]);
+              addCompareGroup();
               setError(null);
             }}
             style={[
@@ -796,6 +835,19 @@ export default function Compare() {
                 borderRadius: 14 * uiScale,
               },
             ]}
+            onLayout={(event) => {
+              const nextLayout = event.nativeEvent.layout;
+              setAddCompareLayout((current) => {
+                if (
+                  current
+                  && Math.abs(current.y - nextLayout.y) < 0.5
+                  && Math.abs(current.height - nextLayout.height) < 0.5
+                ) {
+                  return current;
+                }
+                return nextLayout;
+              });
+            }}
           >
             <Text style={[styles.addCompareText, { fontSize: 26 * uiScale }]}>+</Text>
           </Pressable>
@@ -817,11 +869,7 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   selectionPage: {
-    flex: 1,
-    minHeight: 900,
     backgroundColor: '#2E2F2E',
-    borderWidth: 1,
-    borderColor: '#222222',
   },
   resultPage: {
     flex: 1,
@@ -1044,10 +1092,16 @@ const styles = StyleSheet.create({
     marginTop: 18,
     paddingBottom: 15,
     borderRadius: 16,
+    backgroundColor: 'transparent',
+  },
+  comparisonHeaderBlock: {
+    position: 'relative',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
     backgroundColor: '#212121',
   },
   comparisonPanelHeader: {
-    minHeight: 42,
+    minHeight: 30,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 13,
@@ -1057,29 +1111,41 @@ const styles = StyleSheet.create({
     color: '#F1F1F1',
     fontFamily: 'Goldman',
     fontSize: 12,
+    textAlign: 'center',
   },
   comparisonHeaderCenter: {
     width: 72,
+  },
+  comparisonHeaderCenterOverlay: {
+    position: 'absolute',
+    top: 17,
+    left: 0,
+    right: 0,
     color: '#C8C8C8',
     fontFamily: 'Goldman',
     fontSize: 12,
     textAlign: 'center',
   },
   rightText: {
-    textAlign: 'right',
+    textAlign: 'center',
   },
   candidateRow: {
-    minHeight: 34,
+    minHeight: 24,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 9,
-    borderBottomWidth: 1,
-    borderBottomColor: '#343434',
+    marginTop: -8,
+    paddingHorizontal: 13,
+  },
+  candidateCell: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  comparisonCenterSpacer: {
+    width: 72,
   },
   candidateTag: {
     minWidth: 104,
-    paddingVertical: 4,
+    paddingVertical: 0,
     borderRadius: 14,
     borderWidth: 1,
     fontFamily: 'Goldman',
@@ -1100,14 +1166,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 13,
-    borderBottomWidth: 1,
-    borderBottomColor: '#303030',
+  },
+  comparisonMetrics: {
+    marginTop: 8,
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
+    backgroundColor: '#212121',
   },
   metricValue: {
     flex: 1,
     color: '#F1F1F1',
     fontFamily: 'Goldman',
     fontSize: 16,
+    textAlign: 'center',
   },
   metricLabel: {
     width: 72,

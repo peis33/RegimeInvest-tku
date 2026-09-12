@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import AssetSvg from './AssetSvg';
+import { useAppSettings } from '../context/AppSettingsContext';
 import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const DROPDOWN_ARROW_IMAGE = require('../assets/image/DropdownArrow.svg');
@@ -181,6 +182,7 @@ function SwipeToDelete({
   onDelete,
   onOpenChange,
   resetSignal,
+  visible = true,
 }) {
   const deleteWidth = Math.min(104, 84 * uiScale);
   const dividerExtension = 21 * uiScale;
@@ -252,6 +254,7 @@ function SwipeToDelete({
     <View
       style={[
         styles.swipeRow,
+        !visible ? styles.hidden : null,
         {
           width,
           marginBottom: showSpacingAfter ? 42 * uiScale : 0,
@@ -264,6 +267,7 @@ function SwipeToDelete({
         onPress={onDelete}
         style={[
           styles.deleteAction,
+          !deleteAreaExpanded ? styles.deleteActionHidden : null,
           {
             width: deleteWidth,
             top: deleteAreaExpanded ? -(showDividerBefore ? topDividerGap : dividerExtension) : 0,
@@ -324,21 +328,6 @@ function SwipeToDelete({
   );
 }
 
-function createRule(id) {
-  return {
-    id,
-    alertEnabled: true,
-    highPrice: '',
-    lowPrice: '',
-    highVolume: '',
-    lowVolume: '',
-    year: '',
-    month: '',
-    day: '',
-    selectedCompany: '',
-  };
-}
-
 function RuleForm({
   rule,
   uiScale,
@@ -353,6 +342,9 @@ function RuleForm({
   menuOpen,
   onUpdate,
   onToggleMenu,
+  showAlertToggle,
+  alertEnabled,
+  onToggleAlert,
 }) {
   const update = (field, value) => onUpdate(rule.id, field, value);
   const pickerRef = React.useRef(null);
@@ -383,26 +375,29 @@ function RuleForm({
         },
       ]}
     >
-      <View
-        style={[
-          styles.alertRow,
-          {
-            width: screenWidth,
-            marginLeft: -(screenWidth - contentWidth) / 2,
-            height: 30 * uiScale,
-            paddingLeft: 50 * uiScale,
-            paddingRight: 53 * uiScale,
-          },
-        ]}
-      >
-        <Text style={[styles.label, { fontSize: 21 * uiScale, lineHeight: 30 * uiScale }]}>觸價警示</Text>
-        <Toggle
-          value={rule.alertEnabled}
-          onPress={() => update('alertEnabled', !rule.alertEnabled)}
-          scale={uiScale}
-          disabled={isDeleteMode}
-        />
-      </View>
+      {showAlertToggle ? (
+        <View
+          style={[
+            styles.alertRow,
+            {
+              // 與 Setting.js 上方的設定列使用相同的左右基準，讓標籤與開關對齊。
+              width: screenWidth,
+              marginLeft: -(screenWidth - contentWidth) / 2,
+              height: 30 * uiScale,
+              paddingLeft: 50 * uiScale,
+              paddingRight: 53 * uiScale,
+            },
+          ]}
+        >
+          <Text style={[styles.label, { fontSize: 21 * uiScale, lineHeight: 30 * uiScale }]}>觸價警示</Text>
+          <Toggle
+            value={alertEnabled}
+            onPress={onToggleAlert}
+            scale={uiScale}
+            disabled={isDeleteMode}
+          />
+        </View>
+      ) : null}
 
       <View
         style={[
@@ -410,9 +405,11 @@ function RuleForm({
           {
             width: pickerWidth,
             height: pickerHeight,
+            marginTop: 10 * uiScale,
             alignSelf: 'center',
             zIndex: menuOpen ? 50 : 1,
           },
+          !alertEnabled ? styles.hidden : null,
         ]}
         ref={pickerRef}
       >
@@ -450,7 +447,7 @@ function RuleForm({
         </Pressable>
       </View>
 
-      <View style={[styles.fieldGroup, { marginTop: 15 * uiScale, paddingLeft: 48 * uiScale }]}>
+      <View style={[styles.fieldGroup, { marginTop: 25 * uiScale, paddingLeft: 53 * uiScale }, !alertEnabled ? styles.hidden : null]}>
         <View style={[styles.fieldRow, { height: 26 * uiScale, marginBottom: 11 * uiScale }]}>
           <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>股價高達 $</Text>
           <NumericField value={rule.highPrice} onChangeText={(value) => update('highPrice', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
@@ -461,7 +458,7 @@ function RuleForm({
         </View>
       </View>
 
-      <View style={[styles.fieldGroup, styles.volumeGroup, { marginTop: 16 * uiScale, paddingLeft: 48 * uiScale }]}>
+      <View style={[styles.fieldGroup, styles.volumeGroup, { marginTop: 16 * uiScale, paddingLeft: 53 * uiScale }, !alertEnabled ? styles.hidden : null]}>
         <View style={[styles.fieldRow, { height: 26 * uiScale, marginBottom: 11 * uiScale }]}>
           <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>成交量大於</Text>
           <NumericField value={rule.highVolume} onChangeText={(value) => update('highVolume', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
@@ -472,14 +469,14 @@ function RuleForm({
         </View>
       </View>
 
-      <View style={[styles.dateRow, { marginTop: 26 * uiScale, paddingLeft: 50 * uiScale }]}>
-        <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>至</Text>
+      <View style={[styles.dateRow, { marginTop: 26 * uiScale, paddingLeft: 40 * uiScale }, !alertEnabled ? styles.hidden : null]}>
+        <Text style={[styles.dateLabel, { fontSize: Math.min(15, textSize), lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>至</Text>
         <NumericField value={rule.year} onChangeText={(value) => update('year', value)} width={dateInputWidth} scale={uiScale} radius={5} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
-        <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>年</Text>
+        <Text style={[styles.dateLabel, { fontSize: Math.min(15, textSize), lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>年</Text>
         <NumericField value={rule.month} onChangeText={(value) => update('month', value)} width={dateInputWidth} scale={uiScale} radius={5} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
-        <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>月</Text>
+        <Text style={[styles.dateLabel, { fontSize: Math.min(15, textSize), lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>月</Text>
         <NumericField value={rule.day} onChangeText={(value) => update('day', value)} width={dateInputWidth} scale={uiScale} radius={5} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
-        <Text numberOfLines={1} style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>日 為止</Text>
+        <Text numberOfLines={1} style={[styles.dateLabel, { fontSize: Math.min(15, textSize), lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>日 為止</Text>
       </View>
     </View>
   );
@@ -488,21 +485,33 @@ function RuleForm({
 /**
  * 原設定頁的觸價規則內容，現在可嵌入帳戶／Setting 頁的同一個捲動畫布。
  */
-export default function TriggerRulesSection({ onRuleCountChange, onDeleteModeChange }) {
+export default function TriggerRulesSection({
+  onRuleCountChange,
+  onDeleteModeChange,
+  onContentHeightChange,
+}) {
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
-  const uiScale = Math.min(Math.max(screenWidth / 471, 0.85), 1.35);
-  const contentWidth = Math.min(528, Math.max(280, screenWidth - 92));
-  const inputWidth = 108 * uiScale;
-  const dateInputWidth = 52 * uiScale;
+  const {
+    triggerRules: rules,
+    addTriggerRule,
+    updateTriggerRule,
+    removeTriggerRule,
+  } = useAppSettings();
+  // 以圖二的窄版設定頁作為上限，避免寬螢幕把觸價警示區塊放大到失去比例。
+  const uiScale = Math.min(Math.max(screenWidth / 457, 0.85), 1);
+  const contentWidth = Math.min(358, Math.max(280, screenWidth - 80));
+  const inputWidth = Math.min(102, 108 * uiScale);
+  const dateInputWidth = Math.min(48, 52 * uiScale);
   const textSize = 16 * uiScale;
-  const pickerWidth = Math.min(340, contentWidth * 0.64);
+  const pickerWidth = Math.min(216, contentWidth * 0.64);
   const pickerHeight = 29 * uiScale;
   const menuWidth = pickerWidth * 0.88;
-  const [rules, setRules] = useState(() => [createRule(1)]);
   const [openDropdown, setOpenDropdown] = useState(null);
   const [deleteModeActive, setDeleteModeActive] = useState(false);
   const [swipeResetSignal, setSwipeResetSignal] = useState(0);
-  const nextRuleId = React.useRef(2);
+  const [alertEnabled, setAlertEnabled] = useState(() => rules[0]?.alertEnabled !== false);
+  const storedAlertEnabled = rules[0]?.alertEnabled !== false;
+  const hasEnabledRule = alertEnabled;
 
   useEffect(() => {
     onRuleCountChange?.(rules.length);
@@ -512,28 +521,32 @@ export default function TriggerRulesSection({ onRuleCountChange, onDeleteModeCha
     onDeleteModeChange?.(deleteModeActive);
   }, [deleteModeActive, onDeleteModeChange]);
 
+  useEffect(() => {
+    setAlertEnabled(storedAlertEnabled);
+  }, [storedAlertEnabled]);
+
   const updateRule = (ruleId, field, value) => {
-    setRules((current) =>
-      current.map((rule) => (rule.id === ruleId ? { ...rule, [field]: value } : rule)),
-    );
+    updateTriggerRule(ruleId, { [field]: value });
+  };
+
+  const toggleAlert = () => {
+    const nextValue = !alertEnabled;
+    setAlertEnabled(nextValue);
+    rules.forEach((rule) => updateTriggerRule(rule.id, { alertEnabled: nextValue }));
+    setOpenDropdown(null);
   };
 
   const addRule = () => {
     if (deleteModeActive) return;
 
-    const ruleId = nextRuleId.current;
-    nextRuleId.current += 1;
-    setRules((current) => [...current, createRule(ruleId)]);
+    addTriggerRule();
     setOpenDropdown(null);
   };
 
   const removeRule = (ruleId) => {
     const lastRuleDeleted = rules.length === 1 && rules[0].id === ruleId;
 
-    setRules((current) => {
-      const remaining = current.filter((rule) => rule.id !== ruleId);
-      return remaining.length > 0 ? remaining : [createRule(1)];
-    });
+    removeTriggerRule(ruleId);
     setOpenDropdown(null);
 
     if (lastRuleDeleted) {
@@ -545,7 +558,6 @@ export default function TriggerRulesSection({ onRuleCountChange, onDeleteModeCha
   };
 
   const cancelSwipe = () => {
-    setRules((current) => (current.length > 0 ? current : [createRule(1)]));
     setDeleteModeActive(false);
     setSwipeResetSignal((current) => current + 1);
   };
@@ -556,7 +568,12 @@ export default function TriggerRulesSection({ onRuleCountChange, onDeleteModeCha
   };
 
   return (
-    <View style={[styles.root, { width: screenWidth }]}>
+    <View
+      style={[styles.root, { width: screenWidth }]}
+      onLayout={(event) => {
+        onContentHeightChange?.(event.nativeEvent.layout.height);
+      }}
+    >
       {rules.map((rule, index) => (
         <SwipeToDelete
           key={rule.id}
@@ -564,7 +581,8 @@ export default function TriggerRulesSection({ onRuleCountChange, onDeleteModeCha
           uiScale={uiScale}
           showDividerBefore={deleteModeActive && index === 0}
           showDividerAfter={deleteModeActive && index < rules.length - 1}
-          showSpacingAfter={index < rules.length - 1}
+          showSpacingAfter={alertEnabled && index < rules.length - 1}
+          visible={alertEnabled || index === 0}
           onDelete={() => removeRule(rule.id)}
           resetSignal={swipeResetSignal}
           onOpenChange={(isOpen) => {
@@ -584,6 +602,9 @@ export default function TriggerRulesSection({ onRuleCountChange, onDeleteModeCha
             isDeleteMode={deleteModeActive}
             menuOpen={openDropdown?.ruleId === rule.id}
             onUpdate={updateRule}
+            showAlertToggle={index === 0}
+            alertEnabled={alertEnabled}
+            onToggleAlert={toggleAlert}
             onToggleMenu={(anchor) =>
               setOpenDropdown((current) => {
                 if (current?.ruleId === rule.id) return null;
@@ -594,24 +615,40 @@ export default function TriggerRulesSection({ onRuleCountChange, onDeleteModeCha
         </SwipeToDelete>
       ))}
 
-      {!deleteModeActive ? (
+      {!deleteModeActive && hasEnabledRule ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="新增設定"
           onPress={addRule}
-          style={[styles.addRuleButton, { width: contentWidth, height: 80 * uiScale, marginTop: 38 * uiScale }]}
+          style={[styles.addRuleButton, { width: contentWidth, height: 80 * uiScale, marginTop: 25 * uiScale }]}
         >
           <Text style={[styles.addRuleText, { fontSize: 26 * uiScale }]}>+</Text>
         </Pressable>
       ) : null}
 
       {deleteModeActive ? (
-        <View pointerEvents="box-none" style={styles.swipeCancelLayer}>
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.swipeCancelLayer,
+            {
+              width: screenWidth,
+              height: 44 * uiScale,
+              marginTop: 25 * uiScale,
+            },
+          ]}
+        >
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="取消刪除"
             onPress={cancelSwipe}
-            style={[styles.swipeCancelButton, { width: Math.min(screenWidth * 0.86, 420), height: 44 }]}
+            style={[
+              styles.swipeCancelButton,
+              {
+                width: Math.min(screenWidth * 0.86, 420),
+                height: 44 * uiScale,
+              },
+            ]}
           >
             <Text style={[styles.swipeCancelText, { fontSize: 24 * uiScale }]}>取消</Text>
           </Pressable>
@@ -656,6 +693,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     overflow: 'visible',
   },
+  hidden: {
+    display: 'none',
+  },
   swipeRow: {
     position: 'relative',
     alignSelf: 'center',
@@ -692,13 +732,15 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     boxShadow: 'inset 4px 4px 4px 0 rgba(0, 0, 0, 0.25)',
   },
+  deleteActionHidden: {
+    opacity: 0,
+  },
   deleteActionText: {
     color: '#FFFFFF',
     fontFamily: 'Goldman',
     textAlign: 'center',
   },
   swipeCancelLayer: {
-    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'flex-end',
     zIndex: 120,

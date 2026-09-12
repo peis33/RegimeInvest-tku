@@ -127,7 +127,8 @@ function buildDetailRows(detail, chartData) {
   const shortChange = hasChartMarginData
     ? latestChartPoint.shortChange
     : detail.shortChange;
-  const marginUnit = hasChartMarginData ? '張' : '千元';
+  // 個股明細與三種圖表統一採用 stock_detail_historical.csv 的千元欄位。
+  const marginUnit = '千元';
 
   return {
     recent: [
@@ -401,9 +402,9 @@ function MarketRegimeRing({ data, scale }) {
   );
 }
 
-function DataCell({ item, scale }) {
+function DataCell({ item, scale, minimumWidth }) {
   return (
-    <View style={styles.dataCell}>
+    <View style={[styles.dataCell, { minWidth: minimumWidth }]}>
       <Text
         style={[
           styles.dataLabel,
@@ -434,27 +435,73 @@ function DataCell({ item, scale }) {
   );
 }
 
-function DataTable({ rows, scale }) {
+function estimateDataTextWidth(value, fontSize, scale) {
+  const text = String(value ?? '');
+  const wideCharacterCount = (text.match(/[^\x00-\x7F]/g) || []).length;
+  const narrowCharacterCount = text.length - wideCharacterCount;
   return (
-    <View style={styles.dataTable}>
-      {rows.map((row, rowIndex) => (
-        <View
-          key={`row-${rowIndex}`}
-          style={[
-            styles.dataRow,
-            {
-              minHeight: 46 * scale,
-              paddingHorizontal: 31 * scale,
-            },
-            rowIndex % 2 === 0 ? styles.dataRowDark : styles.dataRowDarker,
-          ]}
-        >
-          {row.map((item) => (
-            <DataCell key={item.label} item={item} scale={scale} />
-          ))}
-        </View>
-      ))}
-    </View>
+    wideCharacterCount * fontSize * 0.95 +
+    narrowCharacterCount * fontSize * 0.62
+  ) * scale;
+}
+
+function getDataCellMinimumWidth(item, scale) {
+  const labelWidth = estimateDataTextWidth(item.label, 15, scale);
+  const valueWidth = estimateDataTextWidth(item.value, 18, scale);
+  const unitWidth = item.unit
+    ? estimateDataTextWidth(`(${item.unit})`, 10, scale) + 4 * scale
+    : 0;
+
+  return labelWidth + 18 * scale + valueWidth + unitWidth + 12 * scale;
+}
+
+function DataTable({ rows, scale, viewportWidth }) {
+  const horizontalPadding = 38 * scale;
+  const tableWidth = Math.max(
+    viewportWidth,
+    ...rows.map((row) => (
+      horizontalPadding * 2 +
+      row.reduce(
+        (total, item) => total + getDataCellMinimumWidth(item, scale),
+        0,
+      )
+    )),
+  );
+
+  return (
+    <ScrollView
+      horizontal
+      nestedScrollEnabled
+      showsHorizontalScrollIndicator
+      style={styles.dataTableScroll}
+      contentContainerStyle={{ minWidth: viewportWidth }}
+    >
+      <View style={[styles.dataTable, { width: tableWidth }]}>
+        {rows.map((row, rowIndex) => (
+          <View
+            key={`row-${rowIndex}`}
+            style={[
+              styles.dataRow,
+              {
+                width: tableWidth,
+                minHeight: 50 * scale,
+                paddingHorizontal: horizontalPadding,
+              },
+              rowIndex % 2 === 0 ? styles.dataRowDark : styles.dataRowDarker,
+            ]}
+          >
+            {row.map((item) => (
+              <DataCell
+                key={item.label}
+                item={item}
+                scale={scale}
+                minimumWidth={getDataCellMinimumWidth(item, scale)}
+              />
+            ))}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -727,6 +774,29 @@ function StockDetail({ stock, investmentData: providedInvestmentData, onBack, st
             },
           ]}
         >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="返回"
+            onPress={() => onBack?.()}
+            style={[
+              styles.backButton,
+              {
+                // 放在同一個 header 內，讓返回鍵與標題一起移動。
+                bottom: 11 * scale + ((29 - 24) / 2) * scale,
+                left: 17 * scale,
+                width: 35 * scale,
+                height: 24 * scale,
+              },
+            ]}
+          >
+            <AssetSvg
+              asset={BACK_IMAGE}
+              width={32 * scale}
+              height={17 * scale}
+              pointerEvents="none"
+            />
+          </Pressable>
+
           <Text
             style={[
               styles.stockTitle,
@@ -882,32 +952,11 @@ function StockDetail({ stock, investmentData: providedInvestmentData, onBack, st
               </View>
             ) : null}
 
-            <DataTable rows={tabRows} scale={scale} />
+            <DataTable rows={tabRows} scale={scale} viewportWidth={screenWidth} />
           </>
         )}
       </ScrollView>
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="返回"
-        onPress={() => onBack?.()}
-        style={[
-          styles.backButton,
-          {
-            top: insets.top + 25 * scale,
-            left: 17 * scale,
-            width: 35 * scale,
-            height: 24 * scale,
-          },
-        ]}
-      >
-        <AssetSvg
-          asset={BACK_IMAGE}
-          width={32 * scale}
-          height={17 * scale}
-          pointerEvents="none"
-        />
-      </Pressable>
     </View>
   );
 }
@@ -1063,6 +1112,10 @@ const styles = StyleSheet.create({
   dataTable: {
     width: '100%',
   },
+  dataTableScroll: {
+    width: '100%',
+    flexGrow: 0,
+  },
   dataRow: {
     width: '100%',
     flexDirection: 'row',
@@ -1080,17 +1133,20 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'baseline',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     minWidth: 0,
+    flexShrink: 0,
   },
   dataLabel: {
     color: '#F1F1F1',
     fontFamily: 'Goldman',
-    flexShrink: 1,
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
   },
   dataValue: {
     fontFamily: 'Goldman',
-    flexShrink: 1,
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
   },
   dataUnit: {
     color: '#F1F1F1',

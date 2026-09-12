@@ -39,21 +39,37 @@ export default function GroupListModal({
   title = '未命名',
   groupName = '',
   onGroupNameChange,
+  nameError = '',
   selectedSymbols = [],
   onConfirm,
 }) {
-  const { width: screenWidth } = useViewportDimensions();
+  const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const groupListWidth = Math.min(500, screenWidth * 0.82);
   const groupListHeight = groupListWidth * (557 / 500);
   const groupListScale = groupListWidth / 500;
-  const [draftSelectedSymbols, setDraftSelectedSymbols] = useState(selectedSymbols);
+  const modalLeft = Math.max(0, (screenWidth - groupListWidth) / 2);
+  const modalTop = Math.max(0, (screenHeight - groupListHeight) / 2);
+  const normalizedSelectedSymbols = Array.isArray(selectedSymbols)
+    ? selectedSymbols.map((symbol) => String(symbol))
+    : [];
+  const [draftSelectedSymbols, setDraftSelectedSymbols] = useState(
+    normalizedSelectedSymbols,
+  );
   const isNameEditable = typeof onGroupNameChange === 'function';
+  const hasNameError = Boolean(String(nameError || '').trim());
+  const selectedSymbolsKey = Array.from(
+    new Set(normalizedSelectedSymbols),
+  )
+    .sort()
+    .join('|');
 
   useEffect(() => {
     if (visible) {
-      setDraftSelectedSymbols(selectedSymbols.map((symbol) => String(symbol)));
+      // 只在視窗開啟或外部選取清單真的改變時初始化。輸入群組名稱會讓
+      // 父層重新渲染，但不能因此把視窗內暫存的股票選取清空。
+      setDraftSelectedSymbols(selectedSymbolsKey ? selectedSymbolsKey.split('|') : []);
     }
-  }, [selectedSymbols, visible]);
+  }, [selectedSymbolsKey, visible]);
 
   const selectedSymbolSet = new Set(
     draftSelectedSymbols.map((symbol) => String(symbol)),
@@ -70,7 +86,7 @@ export default function GroupListModal({
   };
 
   const handleConfirm = () => {
-    if (!draftSelectedSymbols.length) return;
+    if (!draftSelectedSymbols.length || hasNameError) return;
     if (onConfirm) {
       onConfirm([...draftSelectedSymbols]);
     } else {
@@ -102,6 +118,8 @@ export default function GroupListModal({
             {
               width: groupListWidth,
               height: groupListHeight,
+              left: modalLeft,
+              top: modalTop,
             },
           ]}
         >
@@ -196,6 +214,22 @@ export default function GroupListModal({
             />
           </View>
 
+          {hasNameError ? (
+            <Text
+              pointerEvents="none"
+              style={[
+                styles.nameError,
+                {
+                  top: 43 * groupListScale,
+                  fontSize: 13 * groupListScale,
+                  lineHeight: 16 * groupListScale,
+                },
+              ]}
+            >
+              {nameError}
+            </Text>
+          ) : null}
+
           {GROUP_LIST_LAYOUT.map((layout) => {
             const stock = findStock(stocks, layout.symbol);
             const label = stock?.name
@@ -283,8 +317,10 @@ export default function GroupListModal({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="儲存群組"
-            accessibilityState={{ disabled: !draftSelectedSymbols.length }}
-            disabled={!draftSelectedSymbols.length}
+            accessibilityState={{
+              disabled: !draftSelectedSymbols.length || hasNameError,
+            }}
+            disabled={!draftSelectedSymbols.length || hasNameError}
             onPress={handleConfirm}
             style={({ pressed }) => [
               styles.confirmButton,
@@ -320,18 +356,19 @@ export default function GroupListModal({
 const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    position: 'relative',
     zIndex: 100,
     elevation: 100,
   },
   dim: {
     ...StyleSheet.absoluteFillObject,
-    // Match the dim layer used when the top-right Add menu is open.
-    backgroundColor: 'rgba(0, 0, 0, 0.22)',
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
   },
   modal: {
-    position: 'relative',
+    position: 'absolute',
     backgroundColor: '#B7B7B7',
     borderRadius: 10,
     overflow: 'hidden',
@@ -379,6 +416,15 @@ const styles = StyleSheet.create({
   titleInput: {
     padding: 0,
     outlineStyle: 'none',
+  },
+  nameError: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    color: '#9A4242',
+    fontFamily: 'Goldman',
+    fontWeight: '400',
+    textAlign: 'center',
   },
   groupItem: {
     position: 'absolute',

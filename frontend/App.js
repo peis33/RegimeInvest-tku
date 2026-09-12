@@ -24,6 +24,78 @@ const COMPARE_ICON = require('./src/assets/image/compare.svg');
 
 const Tab = createBottomTabNavigator();
 
+const PROFILE_IDENTITY_VALUES = {
+  small: 'small',
+  normal: 'normal',
+  large: 'large',
+  小股民: 'small',
+  中間戶: 'normal',
+  大戶: 'large',
+};
+
+const PROFILE_ALLOCATION_VALUES = {
+  balanced: 'balanced',
+  moderate: 'moderate',
+  concentrated: 'concentrated',
+  平均分散: 'balanced',
+  略為集中: 'moderate',
+  高度集中: 'concentrated',
+};
+
+const PROFILE_RISK_VALUES = {
+  conservative: 'conservative',
+  neutral: 'neutral',
+  aggressive: 'aggressive',
+  保守派: 'conservative',
+  中立派: 'neutral',
+  積極派: 'aggressive',
+};
+
+function normalizeInvestmentProfile(profile = {}) {
+  const source = profile || {};
+  const budgetValue = Number(
+    String(source.budget ?? source.investment_budget ?? '50000').replace(/,/g, ''),
+  );
+  const topNValue = Number(source.top_n ?? source.topN ?? 5);
+  const zipfValue = Number(source.zipf_s ?? source.zipfS ?? 1.2);
+  const allowValue = source.allow_fractional ?? source.allowFractional ?? source.fractionalShare;
+  const allowFractional = typeof allowValue === 'boolean'
+    ? allowValue
+    : allowValue === undefined
+      ? true
+      : String(allowValue).trim().toLowerCase() !== 'false';
+  const investorType = PROFILE_IDENTITY_VALUES[
+    source.investor_type ?? source.investorType ?? source.identity ?? 'normal'
+  ] || 'normal';
+  const allocationPreference = PROFILE_ALLOCATION_VALUES[
+    source.allocation_preference ?? source.allocationPreference ?? 'moderate'
+  ] || 'moderate';
+  const riskPreference = PROFILE_RISK_VALUES[
+    source.risk_preference ?? source.riskPreference ?? 'neutral'
+  ] || 'neutral';
+  const budget = Number.isFinite(budgetValue) && budgetValue > 0 ? budgetValue : 50000;
+  const topN = Number.isFinite(topNValue) ? Math.min(20, Math.max(1, Math.round(topNValue))) : 5;
+  const zipfS = Number.isFinite(zipfValue) && zipfValue > 0 ? zipfValue : 1.2;
+
+  return {
+    budget,
+    investor_type: investorType,
+    risk_preference: riskPreference,
+    allocation_preference: allocationPreference,
+    allow_fractional: allowFractional,
+    preferred_stock_class: source.preferred_stock_class || 'auto',
+    top_n: topN,
+    zipf_s: zipfS,
+    // 保留前端既有欄位名稱，讓登入頁與 Analyze 舊有讀取邏輯也能同步。
+    investorType,
+    riskPreference,
+    allocationPreference,
+    allowFractional,
+    fractionalShare: allowFractional,
+    topN,
+  };
+}
+
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loginPreferences, setLoginPreferences] = useState(null);
@@ -46,8 +118,52 @@ export default function App() {
         <AppSettingsProvider
           initialAllowFractional={loginPreferences?.allowFractional ?? true}
           investmentResult={investmentResult}
+          investmentProfile={investmentResult?.profile || loginPreferences}
           investmentRunPending={investmentRunPending}
           investmentRunError={investmentRunError}
+          rerunInvestment={async (profilePatchOrAllowFractional) => {
+            if (investmentRunPending) {
+              throw new Error('投資配置正在重新計算，請稍候再試。');
+            }
+
+            const currentProfile = investmentResult?.profile || loginPreferences;
+            if (!currentProfile) {
+              throw new Error('找不到目前的投資設定，請重新登入。');
+            }
+
+            const previousResult = investmentResult;
+            const profilePatch = profilePatchOrAllowFractional !== null
+              && typeof profilePatchOrAllowFractional === 'object'
+              ? profilePatchOrAllowFractional
+              : { allow_fractional: Boolean(profilePatchOrAllowFractional) };
+            const nextProfile = normalizeInvestmentProfile({
+              ...currentProfile,
+              ...profilePatch,
+            });
+
+            setInvestmentRunPending(true);
+            setInvestmentRunError(null);
+            setDiscussionRunPending(false);
+            setDiscussionRunError(null);
+            setInvestmentResult(null);
+            setLoginPreferences(nextProfile);
+
+            try {
+              const result = await runInvestment(nextProfile);
+              setInvestmentResult(result);
+              setLoginPreferences(normalizeInvestmentProfile(result?.profile || nextProfile));
+              return result;
+            } catch (error) {
+              setLoginPreferences(currentProfile);
+              setInvestmentResult(previousResult);
+              setInvestmentRunError(
+                error?.message || '無法依新的投資設定重新產生資金配置',
+              );
+              throw error;
+            } finally {
+              setInvestmentRunPending(false);
+            }
+          }}
           discussionRunPending={discussionRunPending}
           discussionRunError={discussionRunError}
           startDiscussion={() => {
@@ -74,7 +190,8 @@ export default function App() {
               <StatusBar style="light" backgroundColor="#596674" />
               <Login
                 onEnter={(preferences) => {
-                  setLoginPreferences(preferences);
+                  const normalizedPreferences = normalizeInvestmentProfile(preferences);
+                  setLoginPreferences(normalizedPreferences);
                   setInvestmentResult(null);
                   setInvestmentRunError(null);
                   setInvestmentRunPending(true);
@@ -84,7 +201,7 @@ export default function App() {
 
                   // Navigate immediately while the backend regenerates the
                   // portfolio from the submitted profile, including budget.
-                  runInvestment(preferences)
+                  runInvestment(normalizedPreferences)
                     .then((result) => setInvestmentResult(result))
                     .catch((error) => {
                       setInvestmentRunError(
@@ -121,7 +238,6 @@ export default function App() {
                   name="Analyze"
                   component={Analyze}
                   initialParams={{
-                    investorType: loginPreferences?.investorType || null,
                     profile: investmentResult?.profile || loginPreferences,
                     portfolio: investmentResult?.portfolio || null,
                   }}

@@ -4,10 +4,9 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Circle, Path, Svg } from 'react-native-svg';
 import AssetSvg from '../components/AssetSvg';
@@ -26,6 +25,7 @@ const NOTICE_IMAGE = require('../assets/image/notice.svg');
 const BACKGROUND_SUN = require('../assets/image/background_sun.svg');
 const BACKGROUND_CLOUD = require('../assets/image/background_cloud.svg');
 const BACKGROUND_RAIN = require('../assets/image/background_rain.svg');
+const STAR_IMAGE = require('../assets/image/star.svg');
 
 const BACKGROUNDS = {
   sun: BACKGROUND_SUN,
@@ -51,13 +51,15 @@ const RISK_LABELS = {
   保守派: '保守派',
 };
 
-const PORTFOLIO_STOCK_COLORS = [
+const PORTFOLIO_DETAIL_COLORS = [
   '#F1D56A',
   '#6CDD49',
   '#EE8A70',
   '#6CA6D8',
   '#C58BD8',
 ];
+// 圓盤與股票明細共用同一組排名顏色，確保同一支股票在兩處顯示一致。
+const PORTFOLIO_DONUT_COLORS = PORTFOLIO_DETAIL_COLORS;
 const PORTFOLIO_CASH_COLOR = '#050505';
 
 const PORTFOLIO_SUMMARY_SCALE = 0.94;
@@ -139,15 +141,58 @@ const CATEGORY_STOCKS = {
   ],
 };
 
+function getStockGroupRouteParams(groupId) {
+  const normalizedGroupId = groupId === 'ALL' ? 'all' : groupId;
+
+  if (INVESTOR_STOCKS[normalizedGroupId]) {
+    return {
+      categoryId: null,
+      investorType: normalizedGroupId,
+      customGroup: false,
+      customGroupId: null,
+      stockGroup: normalizedGroupId,
+    };
+  }
+
+  if (CATEGORY_STOCKS[normalizedGroupId]) {
+    return {
+      categoryId: normalizedGroupId,
+      investorType: null,
+      customGroup: false,
+      customGroupId: null,
+      stockGroup: normalizedGroupId,
+    };
+  }
+
+  if (normalizedGroupId === 'all') {
+    return {
+      categoryId: null,
+      investorType: null,
+      customGroup: false,
+      customGroupId: null,
+      stockGroup: 'all',
+    };
+  }
+
+  return null;
+}
+
 function StockCard({ stock, width, height, onPress }) {
   const scaleX = width / 218;
   const scaleY = height / 184;
-  const percent = toSummaryNumber(stock.percent);
+  const parsedRank = Number(stock.recommendationRank);
+  const recommendationRank = Number.isFinite(parsedRank) && parsedRank >= 1 && parsedRank <= 5
+    ? Math.round(parsedRank)
+    : null;
+  const starCount = recommendationRank ? 6 - recommendationRank : 0;
+  const starSize = Math.max(16, Math.min(23, 26 * scaleX));
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${stock.symbol} ${stock.name}`}
+      accessibilityLabel={recommendationRank
+        ? `${stock.symbol} ${stock.name}，推薦第${recommendationRank}名，${starCount}顆星`
+        : `${stock.symbol} ${stock.name}`}
       onPress={onPress}
       style={[styles.card, { width, height }]}
     >
@@ -181,18 +226,34 @@ function StockCard({ stock, width, height, onPress }) {
       >
         {stock.name}
       </Text>
-      <Text
-        style={[
-          styles.cardPercent,
-          {
-            right: 34 * scaleX,
-            bottom: 36 * scaleY,
-            fontSize: Math.max(22, 32 * scaleX),
-          },
-        ]}
-      >
-        {percent === null ? '--' : `${formatSummaryNumber(percent)}%`}
-      </Text>
+      {starCount > 0 ? (
+        <View
+          accessibilityLabel={`${starCount}顆推薦星等`}
+          pointerEvents="none"
+          style={[
+            styles.cardStars,
+            {
+              // The supplied card SVG includes a right/bottom shadow outside
+              // the blue body (body ends around x=198, y=160 in its
+              // 218x184 viewBox). Keep the stars inside that blue body so
+              // they match the reference instead of sitting on the shadow.
+              right: 24 * scaleX,
+              bottom: 31 * scaleY,
+              zIndex: 2,
+            },
+          ]}
+        >
+          {Array.from({ length: starCount }).map((_, index) => (
+            <AssetSvg
+              key={`${stock.symbol}-star-${index}`}
+              asset={STAR_IMAGE}
+              width={starSize}
+              height={starSize}
+              pointerEvents="none"
+            />
+          ))}
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -286,6 +347,28 @@ function getStockCardTone(row, fallbackTone = 'cloud') {
   return 'cloud';
 }
 
+function sortByRecommendation(rows) {
+  return [...rows].sort((left, right) => {
+    const leftScore = toSummaryNumber(left?.selection_score ?? left?.selectionScore);
+    const rightScore = toSummaryNumber(right?.selection_score ?? right?.selectionScore);
+
+    if (leftScore === null && rightScore === null) return 0;
+    if (leftScore === null) return 1;
+    if (rightScore === null) return -1;
+    return rightScore - leftScore;
+  });
+}
+
+function hasSuggestedPosition(row) {
+  const shares = toSummaryNumber(row?.shares);
+  if (shares !== null) {
+    return shares > 0;
+  }
+
+  const amount = toSummaryNumber(row?.allocated_amount ?? row?.allocatedAmount);
+  return amount !== null && amount > 0;
+}
+
 function getSummaryLabel(value, labels, fallback) {
   const normalized = String(value || '').trim();
   return labels[normalized] || normalized || fallback;
@@ -324,21 +407,21 @@ function buildPortfolioSummary(profile, routeParams, portfolio) {
   const sourceProfile = profile || {};
   const routeProfile = routeParams || {};
   const investorValue =
-    routeProfile.investor_type ??
-    routeProfile.investorType ??
     sourceProfile.investor_type ??
-    sourceProfile.investorType;
+    sourceProfile.investorType ??
+    routeProfile.investor_type ??
+    routeProfile.investorType;
   const riskValue =
-    routeProfile.risk_preference ??
-    routeProfile.riskPreference ??
     sourceProfile.risk_preference ??
-    sourceProfile.riskPreference;
+    sourceProfile.riskPreference ??
+    routeProfile.risk_preference ??
+    routeProfile.riskPreference;
   const budget =
     toSummaryNumber(
-      routeProfile.budget ??
-        routeProfile.investment_budget ??
-        sourceProfile.budget ??
-        sourceProfile.investment_budget,
+      sourceProfile.budget ??
+        sourceProfile.investment_budget ??
+        routeProfile.budget ??
+        routeProfile.investment_budget,
     ) ?? null;
 
   const sourcePortfolio = Array.isArray(portfolio) && portfolio.length
@@ -351,25 +434,40 @@ function buildPortfolioSummary(profile, routeParams, portfolio) {
     }));
   const allowFractional =
     getBooleanSetting(
-      routeProfile.allow_fractional,
-      routeProfile.allowFractional,
       sourceProfile.allow_fractional,
       sourceProfile.allowFractional,
+      routeProfile.allow_fractional,
+      routeProfile.allowFractional,
       ...normalizedRows.map((row) => row.allow_fractional ?? row.allowFractional),
     ) ?? true;
-  // Keep the first five backend-selected stocks for the donut even when one
-  // of them has a final allocation of 0%.  A zero-weight holding contributes
-  // no visible angle, but it must remain part of the chart data so the chart
-  // represents the selected set rather than only the positive allocations.
-  const selectedStockRows = normalizedRows
-    .filter((row) => !isCashRow(row))
-    .slice(0, 5);
+  // Zero-share candidates are still present in the model's selected set, but
+  // they are not actual recommendations and must not contribute to the
+  // displayed portfolio or recommendation ranking.
   const rows = normalizedRows.filter((row) => row.weight > 0);
   const stockRows = rows.filter((row) => !isCashRow(row));
-  const cashRow = normalizedRows.find((row) => isCashRow(row));
-  const stockPercent = stockRows.reduce((sum, row) => sum + row.weight, 0);
-  const explicitCashPercent = cashRow?.weight || 0;
-  const cashPercent = explicitCashPercent || Math.max(0, 100 - stockPercent);
+  const rankedStockRows = sortByRecommendation(
+    normalizedRows.filter((row) => !isCashRow(row)),
+  );
+  const purchasedStockRows = rankedStockRows.filter(hasSuggestedPosition);
+  const rawStockPercent = purchasedStockRows.reduce(
+    (sum, row) => sum + Math.max(0, row.weight),
+    0,
+  );
+  const stockPercent = Math.min(100, rawStockPercent);
+  const cashPercent = Math.max(0, 100 - stockPercent);
+  const sourceCashRow = normalizedRows.find((row) => isCashRow(row));
+  const cashAmount = budget === null
+    ? toSummaryNumber(sourceCashRow?.allocated_amount ?? sourceCashRow?.allocatedAmount)
+    : (budget * cashPercent) / 100;
+  const cashRow = sourceCashRow
+    ? {
+        ...sourceCashRow,
+        weight: cashPercent,
+        final_weight: cashPercent / 100,
+        final_weight_percent: cashPercent,
+        allocated_amount: cashAmount,
+      }
+    : null;
   const hasPurchasableStock = normalizedRows
     .filter((row) => !isCashRow(row))
     .some((row) => {
@@ -408,12 +506,19 @@ function buildPortfolioSummary(profile, routeParams, portfolio) {
     : 0;
   const portfolioRiskLabel =
     normalizedRisk <= 0.012
-      ? '低風險'
+      ? '低等風險'
       : normalizedRisk <= 0.018
         ? '中等風險'
-        : '高風險';
-  const detailRows = stockRows.slice(0, 3);
-  const selectedStockEntries = selectedStockRows.map((row, index) => ({
+        : '高等風險';
+  const portfolioRiskTone =
+    normalizedRisk <= 0.012
+      ? 'low'
+      : normalizedRisk <= 0.018
+        ? 'medium'
+        : 'high';
+  const recommendedStockRows = purchasedStockRows.slice(0, 5);
+  const detailRows = recommendedStockRows;
+  const selectedStockEntries = purchasedStockRows.map((row, index) => ({
     row,
     index,
   }));
@@ -433,7 +538,7 @@ function buildPortfolioSummary(profile, routeParams, portfolio) {
     ...donutStockEntries.map(({ row, index }) => ({
       key: `${row.stock_id || row.symbol || row.name || 'stock'}-${index}`,
       value: row.weight,
-      color: PORTFOLIO_STOCK_COLORS[index % PORTFOLIO_STOCK_COLORS.length],
+      color: PORTFOLIO_DONUT_COLORS[index % PORTFOLIO_DONUT_COLORS.length],
     })),
     ...(cashPercent > 0
       ? [{ key: 'cash', value: cashPercent, color: PORTFOLIO_CASH_COLOR }]
@@ -456,6 +561,7 @@ function buildPortfolioSummary(profile, routeParams, portfolio) {
       ? '目前預算不足以買進 1 股'
       : '建議開啟允許零股',
     portfolioRiskLabel,
+    portfolioRiskTone,
     expectedReturnLabel: formatSummaryPercent(expectedReturn),
   };
 }
@@ -496,6 +602,7 @@ function getDonutSegmentPath(center, outerRadius, innerRadius, startAngle, endAn
 }
 
 function PortfolioDonut({ size, strokeWidth, stockPercent, segments, scale = 1 }) {
+  const captionHeight = 68 * scale;
   const center = size / 2;
   const outerRadius = size / 2;
   const innerRadius = Math.max(0, outerRadius - strokeWidth);
@@ -525,7 +632,7 @@ function PortfolioDonut({ size, strokeWidth, stockPercent, segments, scale = 1 }
     <View
       accessibilityRole="image"
       accessibilityLabel={`股票配置 ${Math.round(stockPercent)}%`}
-      style={[styles.portfolioDonut, { width: size, height: size }]}
+      style={[styles.portfolioDonut, { width: size, height: size + captionHeight }]}
     >
       <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         {segmentGeometry.map((segment) => {
@@ -540,8 +647,8 @@ function PortfolioDonut({ size, strokeWidth, stockPercent, segments, scale = 1 }
                 stroke={segment.color}
                 strokeWidth={strokeWidth}
               />
-            ) : segment.color === PORTFOLIO_STOCK_COLORS[0] ||
-              segment.color === PORTFOLIO_STOCK_COLORS[2] ? (
+            ) : segment.color === PORTFOLIO_DONUT_COLORS[0] ||
+              segment.color === PORTFOLIO_DONUT_COLORS[2] ? (
               <Path
                 key={segment.key}
                 d={getDonutArcPath(
@@ -626,7 +733,10 @@ function PortfolioDonut({ size, strokeWidth, stockPercent, segments, scale = 1 }
           });
         })}
       </Svg>
-      <View pointerEvents="none" style={styles.portfolioDonutCenter}>
+      <View
+        pointerEvents="none"
+        style={[styles.portfolioDonutCaption, { top: size, height: captionHeight }]}
+      >
         <Text
           style={[
             styles.portfolioDonutLabel,
@@ -656,8 +766,12 @@ function PortfolioDonut({ size, strokeWidth, stockPercent, segments, scale = 1 }
 }
 
 function PortfolioSummary({ width, data }) {
-  const summaryScale = PORTFOLIO_SUMMARY_SCALE;
-  const chipScale = summaryScale * Math.min(1, width / 430);
+  // The summary is rendered at the full viewport width.  Keep its typography
+  // in the same scale as the chips themselves so the labels cannot overflow
+  // the three columns on a narrow physical phone.
+  const summaryWidthScale = Math.min(1, Math.max(0.72, width / 430));
+  const summaryScale = PORTFOLIO_SUMMARY_SCALE * summaryWidthScale;
+  const chipScale = summaryScale;
   const donutSize = Math.min(Math.max(width * 0.55, 205), 220) * summaryScale;
   const donutStrokeWidth = Math.max(32, donutSize * 0.17);
   const chipWidths = {
@@ -665,19 +779,22 @@ function PortfolioSummary({ width, data }) {
     risk: getSummaryChipWidth('風險偏好', data.riskLabel, 145, chipScale),
     budget: getSummaryChipWidth('預算', data.budgetLabel, 146, chipScale),
   };
-  const chipHeight = 43 * summaryScale;
+  const chipHeight = Math.max(
+    48 * summaryScale,
+    50 * summaryWidthScale,
+  );
   const chipPadding = 5 * chipScale;
   const chipTextStyle = {
     // Keep the three chips on one line at the reference mobile width while
     // leaving enough room for the full label and value (for example,
     // 「預算 50,000」) without browser text ellipsis.
-    fontSize: 20 * summaryScale,
-    lineHeight: 25 * summaryScale,
+    fontSize: 20 * chipScale,
+    lineHeight: 29 * chipScale,
   };
   const chipLabelStyle = {
-    fontSize: 10 * summaryScale,
-    lineHeight: 14 * summaryScale,
-    marginRight: 5 * summaryScale,
+    fontSize: 10 * chipScale,
+    lineHeight: 18 * chipScale,
+    marginRight: 5 * chipScale,
   };
   const tableRowHeight = 42 * summaryScale;
   const tableHeaderHeight = 28 * summaryScale;
@@ -727,7 +844,7 @@ function PortfolioSummary({ width, data }) {
       weight: `${formatSummaryNumber(row.weight)}%`,
       amount: formatSummaryNumber(amount),
       quantity,
-      color: PORTFOLIO_STOCK_COLORS[index % PORTFOLIO_STOCK_COLORS.length],
+      color: PORTFOLIO_DETAIL_COLORS[index % PORTFOLIO_DETAIL_COLORS.length],
     };
   });
   const cashAmount =
@@ -787,10 +904,24 @@ function PortfolioSummary({ width, data }) {
       <View
         style={[
           styles.portfolioDonutStage,
-          { width, height: donutSize, marginTop: 20 * summaryScale },
+          {
+            width,
+            height: donutSize + 68 * summaryScale,
+            // Leave a stable gap below the three summary chips.  The old
+            // value was too small on a physical phone and the donut visually
+            // overlapped the chip row even though both belonged to the same
+            // vertical layout.
+            marginTop: 36 * summaryScale,
+          },
         ]}
       >
-        <View style={{ position: 'absolute', left: (width - donutSize) / 2 }}>
+        <View
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: (width - donutSize) / 2,
+          }}
+        >
           <PortfolioDonut
             size={donutSize}
             strokeWidth={donutStrokeWidth}
@@ -808,8 +939,28 @@ function PortfolioSummary({ width, data }) {
             },
           ]}
         >
-          <View style={styles.portfolioMetricBadge}>
-            <Text style={styles.portfolioMetricText}>{data.portfolioRiskLabel}</Text>
+          <View
+            style={[
+              styles.portfolioMetricBadge,
+              data.portfolioRiskTone === 'high'
+                ? styles.portfolioMetricBadgeHigh
+                : data.portfolioRiskTone === 'low'
+                  ? styles.portfolioMetricBadgeLow
+                  : null,
+            ]}
+          >
+            <Text
+              style={[
+                styles.portfolioMetricText,
+                data.portfolioRiskTone === 'high'
+                  ? styles.portfolioMetricTextHigh
+                  : data.portfolioRiskTone === 'low'
+                    ? styles.portfolioMetricTextLow
+                    : null,
+              ]}
+            >
+              {data.portfolioRiskLabel}
+            </Text>
           </View>
           <View style={styles.portfolioMetricBadge}>
             <Text style={styles.portfolioMetricText}>
@@ -922,12 +1073,13 @@ function PortfolioSummary({ width, data }) {
 
 export default function Analyze({ route }) {
   const navigation = useNavigation();
+  const isAnalyzeFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const {
     customGroups,
     addCustomGroup,
-    renameCustomGroup,
+    defaultStockGroup,
     investmentResult,
     investmentRunPending,
     investmentRunError,
@@ -939,8 +1091,11 @@ export default function Analyze({ route }) {
   const [customGroupId, setCustomGroupId] = useState(
     route?.params?.customGroupId || null,
   );
-  const [isEditingCustomGroupName, setIsEditingCustomGroupName] = useState(false);
-  const [draftCustomGroupName, setDraftCustomGroupName] = useState('');
+  const normalizedDraftGroupName = String(draftGroupName || '').trim();
+  const hasDuplicateCustomGroupName = Boolean(normalizedDraftGroupName)
+    && customGroups.some(
+      (group) => String(group?.name || '').trim() === normalizedDraftGroupName,
+    );
   const [investorType, setInvestorType] = useState(
     route?.params?.investorType && INVESTOR_STOCKS[route.params.investorType]
       ? route.params.investorType
@@ -1036,8 +1191,18 @@ export default function Analyze({ route }) {
         ? STOCKS.filter((stock) => activeCustomGroup.symbols.includes(stock.symbol))
         : STOCKS;
   const backendStockRows = cardPortfolioRows.filter((row) => !isCashRow(row));
+  const rankedBackendStockRows = sortByRecommendation(backendStockRows);
+  const recommendedBackendStockRows = rankedBackendStockRows
+    .filter(hasSuggestedPosition)
+    .slice(0, 5);
+  const recommendationRankBySymbol = new Map(
+    recommendedBackendStockRows.map((row, index) => [
+      String(row?.stock_id ?? row?.symbol ?? ''),
+      index + 1,
+    ]),
+  );
   const backendStockBySymbol = new Map(
-    backendStockRows.map((row) => [
+    rankedBackendStockRows.map((row) => [
       String(row?.stock_id ?? row?.symbol ?? ''),
       row,
     ]),
@@ -1052,13 +1217,10 @@ export default function Analyze({ route }) {
             ? getStockCardTone(portfolioRow, stock.tone)
             : stock.tone,
           percent: portfolioRow ? getPortfolioWeight(portfolioRow) : null,
+          recommendationRank: recommendationRankBySymbol.get(String(stock.symbol)) || null,
         };
       })
     : [];
-  const categoryHeaderHeight = pageTitle
-    ? Math.max(105, Math.min(184, screenWidth * (105 / 378)))
-    : undefined;
-
   useEffect(() => {
     navigation.setOptions({
       tabBarStyle: selectedStock ? { display: 'none' } : TAB_BAR_STYLE,
@@ -1082,7 +1244,6 @@ export default function Analyze({ route }) {
         : null,
     );
     setCustomGroupId(nextCustomGroupId);
-    setIsEditingCustomGroupName(false);
   }, [
     route?.params?.categoryId,
     route?.params?.investorType,
@@ -1090,27 +1251,42 @@ export default function Analyze({ route }) {
     route?.params?.customGroupId,
   ]);
 
-  const startEditingCustomGroupName = () => {
-    if (!activeCustomGroup) return;
-    setDraftCustomGroupName(activeCustomGroup.name || '');
-    setIsEditingCustomGroupName(true);
-  };
+  useEffect(() => {
+    const nextGroupParams = getStockGroupRouteParams(defaultStockGroup);
+    if (!nextGroupParams) return;
 
-  const finishEditingCustomGroupName = () => {
-    if (!activeCustomGroup || !isEditingCustomGroupName) return;
-    renameCustomGroup(customGroupId, draftCustomGroupName);
-    setIsEditingCustomGroupName(false);
-  };
+    setCustomGroupId(null);
+    setCategoryId(nextGroupParams.categoryId);
+    setInvestorType(nextGroupParams.investorType);
+    navigation.setParams(nextGroupParams);
+  }, [defaultStockGroup, isAnalyzeFocused, navigation]);
 
   const sidePad = Math.max(30, screenWidth * 0.09);
   const columnGap = Math.max(34, screenWidth * 0.12);
   const cardWidth = (screenWidth - sidePad * 2 - columnGap) / 2;
   const cardHeight = cardWidth * (184 / 218);
   const addSize = Math.min(74, Math.max(48, screenWidth * 0.13));
+  const addHeight = addSize * (76 / 74);
+  // 把安全區與新增按鈕的高度一併納入標題列，避免窄版實機因固定高度
+  // 不足而讓上方控制項與摘要內容互相擠壓。
+  const categoryHeaderHeight = pageTitle
+    ? Math.max(
+        105,
+        Math.min(
+          184,
+          Math.max(screenWidth * (105 / 378), insets.top + addHeight + 6),
+        ),
+      )
+    : undefined;
   const menuButtonWidth = Math.min(40, Math.max(36, screenWidth * 0.068));
-  const headerButtonOffset = Math.max(20, screenWidth * 0.03);
-  const categoryTitleOffset =
-    headerButtonOffset + Math.max(4, screenWidth * 0.01);
+  const categoryTitleOffset = Math.max(20, screenWidth * 0.055);
+  const headerTopPadding = insets.top + (pageTitle ? 10 : 28);
+  const headerBottomPadding = pageTitle ? 8 : 36;
+  // 以標題的實際垂直中心對齊 More／新增。固定寫死 20px 在手機安全區
+  // 存在時會把按鈕額外往下推，造成按鈕落到標題列底部。
+  const headerButtonOffset = pageTitle
+    ? categoryTitleOffset - (headerTopPadding - headerBottomPadding) / 2
+    : Math.max(20, screenWidth * 0.03);
   const categoryTitleSize = Math.max(
     28,
     Math.min(48, screenWidth * 0.08),
@@ -1149,6 +1325,21 @@ export default function Analyze({ route }) {
     pageTitle,
   ]);
 
+  // Render the selected stock as a separate full-screen view.  Keeping it as
+  // a sibling overlay of the Analyze ScrollView lets the native stacking
+  // order expose the cards underneath on some phones.
+  if (selectedStock) {
+    return (
+      <View style={[styles.container, { width: screenWidth }]}>
+        <StockDetail
+          stock={selectedStock}
+          investmentData={resolvedInvestment}
+          onBack={() => setSelectedStock(null)}
+        />
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, { width: screenWidth }]}>
       <View pointerEvents="none" style={styles.gridBackdrop}>
@@ -1180,6 +1371,7 @@ export default function Analyze({ route }) {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="更多"
+          hitSlop={18}
           onLayout={(event) => {
             const { x, y, width, height } = event.nativeEvent.layout;
             setMoreButtonLayout({
@@ -1204,73 +1396,33 @@ export default function Analyze({ route }) {
         </Pressable>
         {pageTitle ? (
           <View
-            pointerEvents={activeCustomGroup ? 'box-none' : 'none'}
+            // 標題只負責顯示，避免覆蓋左上角 more 按鈕的觸控區域。
+            pointerEvents="none"
             style={[
               styles.categoryTitleWrap,
               { transform: [{ translateY: categoryTitleOffset }] },
             ]}
           >
-            {activeCustomGroup && isEditingCustomGroupName ? (
-              <TextInput
-                accessibilityLabel="編輯客製群組名稱"
-                autoFocus
-                value={draftCustomGroupName}
-                onChangeText={setDraftCustomGroupName}
-                onSubmitEditing={finishEditingCustomGroupName}
-                onBlur={finishEditingCustomGroupName}
-                placeholder="未命名"
-                placeholderTextColor="rgba(241, 241, 241, 0.7)"
-                maxLength={24}
-                returnKeyType="done"
-                style={[
-                  styles.categoryTitle,
-                  styles.categoryTitleInput,
-                  {
-                    fontSize: categoryTitleSize,
-                    lineHeight: categoryTitleSize + 8,
-                  },
-                ]}
-              />
-            ) : activeCustomGroup ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`編輯${pageTitle}`}
-                onPress={startEditingCustomGroupName}
-                style={styles.categoryTitleButton}
-              >
-                <Text
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.7}
-                  style={[
-                    styles.categoryTitle,
-                    {
-                      fontSize: categoryTitleSize,
-                      lineHeight: categoryTitleSize + 8,
-                    },
-                  ]}
-                >
-                  {pageTitle}
-                </Text>
-              </Pressable>
-            ) : (
-              <Text
-                style={[
-                  styles.categoryTitle,
-                  {
-                    fontSize: categoryTitleSize,
-                    lineHeight: categoryTitleSize + 8,
-                  },
-                ]}
-              >
-                {pageTitle}
-              </Text>
-            )}
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+              style={[
+                styles.categoryTitle,
+                {
+                  fontSize: categoryTitleSize,
+                  lineHeight: categoryTitleSize + 8,
+                },
+              ]}
+            >
+              {pageTitle}
+            </Text>
           </View>
         ) : null}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="新增"
+          hitSlop={12}
           onLayout={(event) => {
             const { x, width, height } = event.nativeEvent.layout;
             const buttonHeight = height || addSize * (76 / 74);
@@ -1332,7 +1484,9 @@ export default function Analyze({ route }) {
             {
               width: screenWidth,
               marginHorizontal: -sidePad,
-              paddingTop: pageTitle ? 28 * PORTFOLIO_SUMMARY_SCALE : 0,
+              paddingTop: pageTitle
+                ? Math.max(22, screenWidth * (28 / 430) * PORTFOLIO_SUMMARY_SCALE)
+                : 0,
             },
           ]}
         >
@@ -1369,10 +1523,46 @@ export default function Analyze({ route }) {
         visible={showMoreMenu}
         onClose={() => setShowMoreMenu(false)}
         anchor={moreButtonLayout}
-        selectedId={investorType}
+        customGroups={customGroups}
+        selectedId={
+          investorType
+          || categoryId
+          || (isCustomGroup ? `custom:${customGroupId}` : 'all')
+        }
         onSelect={(id) => {
+          if (String(id).startsWith('custom:')) {
+            const selectedCustomGroupId = String(id).slice('custom:'.length);
+            const selectedGroup = customGroups.find(
+              (group) => group.id === selectedCustomGroupId,
+            );
+            if (!selectedGroup) return;
+
+            setCustomGroupId(selectedCustomGroupId);
+            setCategoryId(null);
+            setInvestorType(null);
+            navigation.setParams({
+              categoryId: null,
+              investorType: null,
+              customGroup: true,
+              customGroupId: selectedCustomGroupId,
+              stockGroup: `custom:${selectedCustomGroupId}`,
+            });
+            setShowMoreMenu(false);
+            return;
+          }
+
           setCustomGroupId(null);
-          if (CATEGORY_STOCKS[id]) {
+          if (id === 'all') {
+            setCategoryId(null);
+            setInvestorType(null);
+            navigation.setParams({
+              categoryId: null,
+              investorType: null,
+              customGroup: false,
+              customGroupId: null,
+              stockGroup: 'all',
+            });
+          } else if (CATEGORY_STOCKS[id]) {
             setCategoryId(id);
             setInvestorType(null);
             navigation.setParams({
@@ -1380,6 +1570,7 @@ export default function Analyze({ route }) {
               investorType: null,
               customGroup: false,
               customGroupId: null,
+              stockGroup: id,
             });
           } else if (INVESTOR_STOCKS[id]) {
             setCategoryId(null);
@@ -1389,6 +1580,7 @@ export default function Analyze({ route }) {
               investorType: id,
               customGroup: false,
               customGroupId: null,
+              stockGroup: id,
             });
           }
           setShowMoreMenu(false);
@@ -1402,9 +1594,12 @@ export default function Analyze({ route }) {
         title="未命名"
         groupName={draftGroupName}
         onGroupNameChange={setDraftGroupName}
+        nameError={hasDuplicateCustomGroupName ? '群組名稱不能重複' : ''}
         selectedSymbols={[]}
         onConfirm={(symbols) => {
           const newCustomGroupId = addCustomGroup(symbols, draftGroupName);
+          if (!newCustomGroupId) return;
+
           setCustomGroupId(newCustomGroupId);
           setCategoryId(null);
           setInvestorType(null);
@@ -1414,18 +1609,11 @@ export default function Analyze({ route }) {
             investorType: null,
             customGroup: true,
             customGroupId: newCustomGroupId,
+            stockGroup: `custom:${newCustomGroupId}`,
           });
         }}
       />
 
-      {selectedStock ? (
-        <StockDetail
-          stock={selectedStock}
-          investmentData={resolvedInvestment}
-          onBack={() => setSelectedStock(null)}
-          style={styles.stockDetailOverlay}
-        />
-      ) : null}
     </View>
   );
 }
@@ -1465,11 +1653,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 8,
     zIndex: 2,
+    elevation: 10,
   },
   moreButton: {
     alignItems: 'center',
     justifyContent: 'center',
     outlineStyle: 'none',
+    zIndex: 3,
+    elevation: 3,
   },
   categoryHeader: {
     backgroundColor: '#596877',
@@ -1500,17 +1691,6 @@ const styles = StyleSheet.create({
     lineHeight: 38,
     fontWeight: '400',
   },
-  categoryTitleButton: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  categoryTitleInput: {
-    padding: 0,
-    outlineStyle: 'none',
-    textAlign: 'center',
-  },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1521,10 +1701,14 @@ const styles = StyleSheet.create({
   portfolioSummary: {
     alignItems: 'center',
     backgroundColor: '#2E2F2E',
+    overflow: 'visible',
+    zIndex: 2,
   },
   portfolioSummaryWrapper: {
     flexShrink: 0,
     backgroundColor: '#2E2F2E',
+    overflow: 'visible',
+    zIndex: 2,
   },
   portfolioStatus: {
     minHeight: 250,
@@ -1555,6 +1739,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'visible',
   },
   summaryChipIdentity: {
     flex: 1.05,
@@ -1592,7 +1777,6 @@ const styles = StyleSheet.create({
   portfolioDonut: {
     position: 'relative',
     alignItems: 'center',
-    justifyContent: 'center',
   },
   portfolioDonutStage: {
     position: 'relative',
@@ -1613,12 +1797,24 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: '#242424',
   },
+  portfolioMetricBadgeHigh: {
+    borderColor: '#8F5C5C',
+  },
+  portfolioMetricBadgeLow: {
+    borderColor: '#5C8F63',
+  },
   portfolioMetricText: {
     color: '#B9C8D7',
     fontFamily: 'Goldman',
     fontSize: 8,
     lineHeight: 11,
     whiteSpace: 'nowrap',
+  },
+  portfolioMetricTextHigh: {
+    color: '#E3A1A1',
+  },
+  portfolioMetricTextLow: {
+    color: '#A5D6A7',
   },
   budgetWarning: {
     marginTop: 8,
@@ -1644,10 +1840,12 @@ const styles = StyleSheet.create({
     fontSize: 9,
     lineHeight: 12,
   },
-  portfolioDonutCenter: {
-    ...StyleSheet.absoluteFillObject,
+  portfolioDonutCaption: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
   },
   portfolioDonutLabel: {
     color: '#F1F1F1',
@@ -1747,11 +1945,9 @@ const styles = StyleSheet.create({
     fontFamily: 'Goldman',
     fontWeight: '400',
   },
-  cardPercent: {
+  cardStars: {
     position: 'absolute',
-    color: '#FFFFFF',
-    fontFamily: 'Goldman',
-    fontWeight: '400',
-    textAlign: 'right',
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 });

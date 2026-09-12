@@ -280,9 +280,24 @@ function formatDuration(market) {
 function getMarketReturnPercent(snapshot, chartData) {
   const chartPoints = Array.isArray(chartData?.points) ? chartData.points : [];
   const latestChartPoint = chartPoints[chartPoints.length - 1];
-  return toFiniteNumber(
+  const chartReturnPercent = toFiniteNumber(
     latestChartPoint?.returnPercent ?? snapshot?.returnPercent,
   );
+  if (chartReturnPercent !== null) {
+    return chartReturnPercent;
+  }
+
+  // 圖表資料暫時無法載入時，仍可用行情快照的漲跌額與收盤價
+  // 還原當日報酬率，避免首頁顯示成「--」。
+  const close = toFiniteNumber(snapshot?.close);
+  const change = toFiniteNumber(snapshot?.change);
+  const previousClose = close !== null && change !== null
+    ? close - change
+    : null;
+
+  return previousClose !== null && previousClose !== 0 && change !== null
+    ? (change / previousClose) * 100
+    : null;
 }
 
 function formatMarketChange(returnPercent) {
@@ -494,11 +509,8 @@ function buildHomeDataRows(snapshot, tabKey, chartData) {
   const currentSnapshot = latestChartPoint
     ? { ...snapshot, ...latestChartPoint }
     : snapshot;
-  const hasChartMarginData =
-    latestChartPoint &&
-    (latestChartPoint.marginBalance !== undefined ||
-      latestChartPoint.shortBalance !== undefined);
-  const marginUnit = hasChartMarginData ? '張' : '千元';
+  // 首頁與個股頁統一採用 stock_detail_historical.csv 的千元欄位。
+  const marginUnit = '千元';
 
   const cell = (label, value, unit = null, toneValue = value, digits = 0) => ({
     label,

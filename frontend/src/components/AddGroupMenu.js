@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getCustomGroupDisplayName } from '../utils/customGroups';
 import useViewportDimensions from '../hooks/useViewportDimensions';
 
@@ -69,6 +70,15 @@ const INVESTOR_ITEMS = [
   },
 ];
 
+const ALL_ITEM = {
+  id: 'all',
+  label: 'ALL',
+  fill: '#A0A8C0',
+  pushedFill: '#727F99',
+  strokeColor: 'rgba(217, 217, 217, 1)',
+  textOpacity: 1,
+};
+
 const INVESTOR_AND_GROUP_ITEMS = [
   ...INVESTOR_ITEMS,
   ...GROUP_ITEMS.map((item) => ({
@@ -76,6 +86,7 @@ const INVESTOR_AND_GROUP_ITEMS = [
     fill: '#A0A8C0',
     pushedFill: '#727F99',
   })),
+  ALL_ITEM,
 ];
 
 function ProgrammaticMenuButton({
@@ -239,7 +250,8 @@ export default function AddGroupMenu({
   customGroups = [],
   includeCategories = false,
 }) {
-  const { width: screenWidth } = useViewportDimensions();
+  const insets = useSafeAreaInsets();
+  const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const [pressedId, setPressedId] = useState(null);
   const releaseTimerRef = useRef(null);
   const selectTimerRef = useRef(null);
@@ -281,7 +293,11 @@ export default function AddGroupMenu({
   }));
   const items = isInvestorMenu
     ? includeCategories
-      ? INVESTOR_AND_GROUP_ITEMS
+      ? [
+          ...INVESTOR_AND_GROUP_ITEMS.slice(0, -1),
+          ...customGroupItems,
+          ALL_ITEM,
+        ]
       : INVESTOR_ITEMS
     : [...GROUP_ITEMS, ...customGroupItems, CUSTOM_GROUP_ITEM];
   const paneScale = isInvestorMenu ? 1 : 1;
@@ -349,6 +365,15 @@ export default function AddGroupMenu({
   const panelTop = anchor
     ? Math.max(0, anchor.y + anchor.height + panelGap)
     : Math.max(12, screenWidth * 0.08);
+  const bottomNavigationHeight = Math.max(insets.bottom, 18) + 8 + 62;
+  const bottomNavigationGap = 8;
+  const availablePanelHeight = Math.max(
+    slotHeight + verticalPad * 2,
+    screenHeight - panelTop - bottomNavigationHeight - bottomNavigationGap,
+  );
+  const naturalPanelHeight = panelHeight;
+  const visiblePanelHeight = Math.min(naturalPanelHeight, availablePanelHeight);
+  const isScrollable = naturalPanelHeight > visiblePanelHeight + 0.5;
 
   return (
     <>
@@ -365,7 +390,7 @@ export default function AddGroupMenu({
             styles.panelWrap,
             {
               width: panelWidth,
-              height: panelHeight,
+              height: visiblePanelHeight,
               ...(isInvestorMenu ? { left: panelLeft } : { right: panelRight }),
               top: panelTop,
             },
@@ -374,18 +399,26 @@ export default function AddGroupMenu({
           {isInvestorMenu ? (
             <DynamicInvestorPanelBackground
               width={panelWidth}
-              height={panelHeight}
+              height={visiblePanelHeight}
             />
           ) : (
             <DynamicGroupPanelBackground
               width={panelWidth}
-              height={panelHeight}
+              height={visiblePanelHeight}
             />
           )}
-          <View
-            style={[
-              styles.buttonColumn,
+          <ScrollView
+            accessibilityLabel={isScrollable ? '可捲動群組選單' : undefined}
+            bounces={false}
+            nestedScrollEnabled
+            overScrollMode="never"
+            scrollEnabled={isScrollable}
+            showsVerticalScrollIndicator={false}
+            style={styles.buttonScroll}
+            contentContainerStyle={[
+              styles.buttonColumnContent,
               {
+                minHeight: naturalPanelHeight,
                 paddingTop,
                 paddingBottom,
                 gap: buttonGap,
@@ -426,7 +459,7 @@ export default function AddGroupMenu({
                 }}
               />
             ))}
-          </View>
+          </ScrollView>
         </View>
       </View>
     </>
@@ -436,20 +469,22 @@ export default function AddGroupMenu({
 const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 80,
-    elevation: 80,
+    zIndex: 300,
+    elevation: 300,
     alignItems: 'flex-start',
     justifyContent: 'flex-start',
   },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.22)',
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
   },
   panelWrap: {
     position: 'absolute',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
     zIndex: 1,
+    elevation: 1,
   },
   panelBackground: {
     position: 'absolute',
@@ -457,13 +492,15 @@ const styles = StyleSheet.create({
     left: 0,
     zIndex: 0,
   },
-  buttonColumn: {
+  buttonScroll: {
     flex: 1,
     width: '100%',
-    alignSelf: 'center',
+    zIndex: 1,
+  },
+  buttonColumnContent: {
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 1,
   },
   menuButton: {
     alignSelf: 'center',
