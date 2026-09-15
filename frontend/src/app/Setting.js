@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import PageHeader from '../components/PageHeader';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  Image,
   Platform,
   Pressable,
   ScrollView,
@@ -9,9 +9,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { Ellipse, Svg } from 'react-native-svg';
 import AssetSvg from '../components/AssetSvg';
 import TriggerRulesSection from '../components/TriggerRulesSection';
 import { TAB_BAR_STYLE } from '../components/TabBar';
@@ -26,8 +26,8 @@ import {
 } from './Login';
 
 const DROPDOWN_ARROW_IMAGE = require('../assets/image/DropdownArrow.svg');
-const PROFILE_PHOTO_IMAGE = require('../assets/image/ProfilePhoto.svg');
-const NAME_IMAGE = require('../assets/image/name.svg');
+const SETTINGS_GEARS = require('../assets/image/ProfilePhoto.svg');
+const ARROW_IMAGE = require('../assets/image/arrow.svg');
 
 const DEFAULT_PROFILE = {
   investor_type: 'normal',
@@ -38,17 +38,17 @@ const DEFAULT_PROFILE = {
 };
 
 const DEFAULT_GROUP_OPTIONS = [
+  { value: '', label: '依登入身分' },
   { value: '大戶', label: '大戶' },
   { value: '中間戶', label: '中間戶' },
   { value: '小股民', label: '小股民' },
-  { value: 'semiconductor', label: '半導體產業' },
-  { value: 'ElectronicComponents', label: '電子零件產業' },
-  { value: 'FinancialHolding', label: '金控產業' },
   { value: 'all', label: 'ALL' },
 ];
 
-const PROFILE_SETTINGS_TOP = 480;
-const PROFILE_SETTINGS_HEIGHT = 492;
+const PROFILE_SETTINGS_TOP = 335;
+const SETTINGS_ROW_GAP = 66;
+const SETTINGS_ROW_TOPS = Array.from({ length: 7 }, (_, index) => index * SETTINGS_ROW_GAP);
+const PROFILE_SETTINGS_HEIGHT = SETTINGS_ROW_TOPS.length * SETTINGS_ROW_GAP;
 
 function getProfileValue(profile, keys, fallback) {
   for (const key of keys) {
@@ -78,9 +78,9 @@ function parseBudget(value) {
 }
 
 function Toggle({ value, onPress, scale, accessibilityLabel = '設定開關', disabled = false }) {
-  const width = 63 * scale;
-  const height = 23 * scale;
-  const thumbSize = 21 * scale;
+  const width = 56 * scale;
+  const height = 28 * scale;
+  const thumbSize = 23 * scale;
 
   return (
     <Pressable
@@ -128,7 +128,7 @@ function ProfileDropdown({
       style={[
         styles.profileDropdown,
         disabled ? styles.profileDropdownDisabled : null,
-        { width: width * scale, height: 28 * scale, borderRadius: 50 * scale },
+        { width: width * scale, height: 35 * scale, borderRadius: 50 * scale },
       ]}
     >
       <View
@@ -144,7 +144,7 @@ function ProfileDropdown({
             {
               left: 17 * scale,
               right: 35 * scale,
-              top: 1 * scale,
+              top: 5 * scale,
               fontSize: 16 * scale,
               lineHeight: 25 * scale,
             },
@@ -213,13 +213,20 @@ function ProfileNumberField({
   value,
   onChangeText,
   onCommit,
+  onEditingChange,
   onIncrement,
   onDecrement,
   accessibilityLabel,
   disabled = false,
 }) {
+  const stepInProgress = useRef(false);
+  const commit = () => { if (!stepInProgress.current) onCommit(); };
+  const step = (action) => {
+    action();
+    setTimeout(() => { stepInProgress.current = false; }, 0);
+  };
   const width = 168 * scale;
-  const height = 28 * scale;
+  const height = 35 * scale;
 
   return (
     <View style={[styles.numberField, disabled ? styles.profileDropdownDisabled : null, { width, height, borderRadius: 50 * scale }]}>
@@ -231,16 +238,18 @@ function ProfileNumberField({
         accessibilityLabel={accessibilityLabel}
         value={value}
         onChangeText={onChangeText}
-        onBlur={onCommit}
-        onSubmitEditing={onCommit}
+        onFocus={() => onEditingChange?.(true)}
+        onBlur={() => { onEditingChange?.(false); commit(); }}
+        selectTextOnFocus
+        onSubmitEditing={commit}
         editable={!disabled}
         keyboardType="numeric"
         returnKeyType="done"
         style={[
           styles.numberFieldInput,
           {
-            left: 17 * scale,
-            right: 29 * scale,
+            width: width - 46 * scale,
+            marginLeft: 17 * scale,
             height,
             fontSize: 16 * scale,
             lineHeight: 24 * scale,
@@ -251,7 +260,8 @@ function ProfileNumberField({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`增加${accessibilityLabel}`}
-          onPress={onIncrement}
+          onPressIn={() => { stepInProgress.current = true; }}
+          onPress={() => step(onIncrement)}
           disabled={disabled}
           style={styles.numberStepperButton}
         >
@@ -269,7 +279,8 @@ function ProfileNumberField({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`減少${accessibilityLabel}`}
-          onPress={onDecrement}
+          onPressIn={() => { stepInProgress.current = true; }}
+          onPress={() => step(onDecrement)}
           disabled={disabled}
           style={styles.numberStepperButton}
         >
@@ -289,59 +300,43 @@ function ProfileNumberField({
   );
 }
 
-function Avatar({ imageUri, size }) {
-  return (
-    <View style={[styles.avatar, { borderRadius: size / 2 }]}>
-      {imageUri ? (
-        <Image
-          source={{ uri: imageUri }}
-          resizeMode="cover"
-          style={styles.avatarImage}
-        />
-      ) : (
-        <AssetSvg
-          asset={PROFILE_PHOTO_IMAGE}
-          width={size}
-          height={size}
-          pointerEvents="none"
-        />
-      )}
-    </View>
-  );
-}
-
 export default function Setting() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const {
-    actionWindowEnabled,
-    setActionWindowEnabled,
     allowFractional,
     setAllowFractional,
     defaultStockGroup,
     setDefaultStockGroup,
-    profileName,
-    setProfileName,
-    profileImageUri,
-    setProfileImageUri,
     investmentProfile,
     investmentRunPending,
     investmentRunError,
     rerunInvestment,
   } = useAppSettings();
   // 以參考圖二的比例為上限，避免寬螢幕將設定區塊放大得過度鬆散。
-  const scale = Math.min(Math.max(screenWidth / 457, 0.85), 1);
+  const scale = Math.min(screenWidth / 457, 1);
+  // Reference artwork: 771px canvas, 720px-wide SVG at (29, 118).
+  // Scale the whole 300:200:100 gear composition together with the header.
+  const headerScale = screenWidth / 457;
+  const headerReduction = Platform.OS === 'web' ? 0 : 55 * headerScale;
+  const artworkTop = insets.top - headerReduction;
+  const originalGearsWidth = screenWidth * (720 / 771);
+  const gearsWidth = originalGearsWidth * 0.95;
+  const gearsInset = (originalGearsWidth - gearsWidth) / 2;
+  const settingsTop = artworkTop + PROFILE_SETTINGS_TOP * headerScale;
   const [showCustomGroupName, setShowCustomGroupName] = useState(false);
   const [openMenu, setOpenMenu] = useState(null);
   const [identity, setIdentity] = useState(DEFAULT_PROFILE.investor_type);
   const [allocationPreference, setAllocationPreference] = useState(DEFAULT_PROFILE.allocation_preference);
   const [riskPreference, setRiskPreference] = useState(DEFAULT_PROFILE.risk_preference);
   const [topN, setTopN] = useState(String(DEFAULT_PROFILE.top_n));
+  const budgetEditing = useRef(false);
+  const numbersDirty = useRef(false);
+  const profileSaveInFlight = useRef(false);
+  const queuedProfileChanges = useRef(null);
+  const [profileSaveError, setProfileSaveError] = useState(null);
   const [budget, setBudget] = useState(formatBudget(DEFAULT_PROFILE.budget));
-  const [draftProfileImageUri, setDraftProfileImageUri] = useState(null);
-  const [draftName, setDraftName] = useState('');
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [ruleCount, setRuleCount] = useState(1);
   const [ruleDeleteMode, setRuleDeleteMode] = useState(false);
   const [triggerRulesHeight, setTriggerRulesHeight] = useState(0);
@@ -354,10 +349,10 @@ export default function Setting() {
     risk: RISK_OPTIONS,
   };
   const profileMenuRowTop = {
-    group: 58,
-    identity: 220,
-    allocation: 274,
-    risk: 328,
+    group: 0,
+    identity: SETTINGS_ROW_TOPS[2],
+    allocation: SETTINGS_ROW_TOPS[3],
+    risk: SETTINGS_ROW_TOPS[4],
   };
   const bottomNavigationReservedHeight = Math.max(insets.bottom, 18) + 8 + 62;
   const bottomNavigationContentGap = 20 * scale;
@@ -367,11 +362,13 @@ export default function Setting() {
   const resolvedTriggerRulesHeight = triggerRulesHeight > 0
     ? triggerRulesHeight
     : estimatedTriggerRulesHeight;
-  const triggerRulesTop = (PROFILE_SETTINGS_TOP + PROFILE_SETTINGS_HEIGHT) * scale;
+  const triggerRulesTop = settingsTop + PROFILE_SETTINGS_HEIGHT * scale;
+  const profileStatusHeight = investmentRunPending || profileSaveError || investmentRunError ? 65 * scale : 0;
   const canvasHeight = Math.max(
     screenHeight,
     triggerRulesTop
       + resolvedTriggerRulesHeight
+      + profileStatusHeight
       + bottomNavigationReservedHeight
       + bottomNavigationContentGap,
   );
@@ -393,83 +390,42 @@ export default function Setting() {
       getProfileValue(profile, ['risk_preference', 'riskPreference'], DEFAULT_PROFILE.risk_preference),
       DEFAULT_PROFILE.risk_preference,
     ));
-    setTopN(String(getProfileValue(profile, ['top_n', 'topN'], DEFAULT_PROFILE.top_n)));
-    setBudget(formatBudget(getProfileValue(profile, ['budget', 'investment_budget'], DEFAULT_PROFILE.budget)));
+    if (!numbersDirty.current) setTopN(String(getProfileValue(profile, ['top_n', 'topN'], DEFAULT_PROFILE.top_n)));
+    if (!budgetEditing.current && !numbersDirty.current) {
+      setBudget(formatBudget(getProfileValue(profile, ['budget', 'investment_budget'], DEFAULT_PROFILE.budget)));
+    }
   }, [investmentProfile]);
 
-  const handleChangePhoto = async () => {
-    try {
-      if (Platform.OS !== 'web') {
-        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!permission.granted) return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        // 以 base64 保存，避免 Web 的 blob URL 在重新整理後失效；
-        // 同一份資料也能在原生 App 重開後繼續使用。
-        base64: true,
-        quality: 0.8,
-      });
-
-      const asset = result.assets?.[0];
-      if (!result.canceled && asset?.uri) {
-        let persistentImageUri = asset.uri;
-
-        if (asset.base64) {
-          persistentImageUri = `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
-        } else if (
-          Platform.OS === 'web'
-          && asset.file
-          && typeof globalThis.FileReader !== 'undefined'
-        ) {
-          persistentImageUri = await new Promise((resolve, reject) => {
-            const reader = new globalThis.FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(asset.file);
-          });
-        }
-
-        setDraftProfileImageUri(persistentImageUri);
-      }
-    } catch (error) {
-      console.warn('無法選擇頭像', error);
-    }
-  };
-
-  const handleStartEditingProfile = () => {
-    setOpenMenu(null);
-    setDraftName(profileName);
-    setDraftProfileImageUri(profileImageUri);
-    setIsEditingProfile(true);
-  };
-
-  const handleFinishEditingProfile = () => {
-    setProfileName(draftName.trim());
-    setProfileImageUri(draftProfileImageUri);
-    setIsEditingProfile(false);
-  };
-
-  const handleCancelEditingProfile = () => {
-    setDraftName(profileName);
-    setDraftProfileImageUri(profileImageUri);
-    setIsEditingProfile(false);
-  };
-
   const applyProfileChange = async (changes) => {
-    if (settingsDisabled || typeof rerunInvestment !== 'function') return;
-
+    if (settingsDisabled || profileSaveInFlight.current) {
+      queuedProfileChanges.current = { ...queuedProfileChanges.current, ...changes };
+      return;
+    }
+    if (Object.entries(changes).every(([key, value]) => String(investmentProfile?.[key]) === String(value))) return;
+    if (typeof rerunInvestment !== 'function') {
+      setProfileSaveError('無法更新投資設定，請重新登入。');
+      return;
+    }
+    profileSaveInFlight.current = true;
+    setProfileSaveError(null);
     try {
       await rerunInvestment(changes);
+      numbersDirty.current = false;
     } catch (error) {
       // App 會還原上一份成功設定並把錯誤放進 context；這裡避免未處理
       // 的 Promise 讓設定頁出現額外的瀏覽器錯誤。
-      console.warn('設定頁重新計算失敗', error);
+      setProfileSaveError(error?.message || '設定更新失敗，請稍後再試。');
+    } finally {
+      profileSaveInFlight.current = false;
     }
   };
+
+  useEffect(() => {
+    if (settingsDisabled || !queuedProfileChanges.current) return;
+    const changes = queuedProfileChanges.current;
+    queuedProfileChanges.current = null;
+    void applyProfileChange(changes);
+  }, [settingsDisabled]);
 
   const handleProfileMenuPress = (menu, value) => {
     setOpenMenu(null);
@@ -509,43 +465,37 @@ export default function Setting() {
 
   const handleTopNChange = (value) => {
     const digits = String(value ?? '').replace(/[^0-9]/g, '');
-    setTopN(digits ? String(Math.min(20, Math.max(1, Number(digits)))) : '');
-  };
-
-  const commitTopN = () => {
-    const nextTopN = normalizeTopN(topN);
-    setTopN(String(nextTopN));
-    void applyProfileChange({ top_n: nextTopN });
+    numbersDirty.current = true;
+    setTopN(digits);
   };
 
   const stepTopN = (delta) => {
+    numbersDirty.current = true;
     const nextTopN = Math.min(20, Math.max(1, normalizeTopN(topN) + delta));
     setTopN(String(nextTopN));
     void applyProfileChange({ top_n: nextTopN });
   };
 
   const handleBudgetChange = (value) => {
+    numbersDirty.current = true;
     setBudget(String(value ?? '').replace(/[^0-9]/g, ''));
   };
 
-  const commitBudget = () => {
+  const commitNumbers = () => {
     const nextBudget = parseBudget(budget);
     if (nextBudget === null) {
-      setBudget(formatBudget(getProfileValue(
-        investmentProfile,
-        ['budget', 'investment_budget'],
-        DEFAULT_PROFILE.budget,
-      )));
+      setProfileSaveError('請輸入大於 0 的預算。');
       return;
     }
-
+    const nextTopN = normalizeTopN(topN);
     setBudget(formatBudget(nextBudget));
-    void applyProfileChange({ budget: nextBudget });
+    setTopN(String(nextTopN));
+    void applyProfileChange({ budget: nextBudget, top_n: nextTopN });
   };
 
   const stepBudget = (delta) => {
-    const currentBudget = parseBudget(budget) || DEFAULT_PROFILE.budget;
-    const nextBudget = Math.max(1, currentBudget + delta);
+    numbersDirty.current = true;
+    const nextBudget = Math.max(1, (parseBudget(budget) || DEFAULT_PROFILE.budget) + delta);
     setBudget(formatBudget(nextBudget));
     void applyProfileChange({ budget: nextBudget });
   };
@@ -553,7 +503,7 @@ export default function Setting() {
   const identityLabel = getOptionLabel(IDENTITY_OPTIONS, identity, '中間戶');
   const allocationLabel = getOptionLabel(ALLOCATION_OPTIONS, allocationPreference, '略為集中');
   const riskLabel = getOptionLabel(RISK_OPTIONS, riskPreference, '中立派');
-  const defaultGroupLabel = getOptionLabel(DEFAULT_GROUP_OPTIONS, defaultStockGroup, '');
+  const defaultGroupLabel = getOptionLabel(DEFAULT_GROUP_OPTIONS, defaultStockGroup, '依登入身分');
 
   const handleAllowFractionalToggle = async () => {
     if (settingsDisabled) return;
@@ -593,157 +543,53 @@ export default function Setting() {
   }, [navigation, ruleDeleteMode, showCustomGroupName]);
 
   if (showCustomGroupName) {
-    return <CustomGroupName onBack={() => setShowCustomGroupName(false)} />;
+    return <CustomGroupName
+      onBack={() => setShowCustomGroupName(false)}
+
+    />;
   }
 
   return (
     <View style={[styles.container, { width: screenWidth }]}>
+      <PageHeader title="設定" backgroundColor="#596570" />
       <ScrollView
         style={styles.screenScroll}
         horizontal={false}
         bounces={false}
         overScrollMode="never"
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{
           width: screenWidth,
           minHeight: canvasHeight,
           paddingBottom: 0,
         }}
       >
-        <View style={[styles.canvas, { width: screenWidth, height: canvasHeight }]}>
-          <View
+        <View style={[styles.canvas, { width: screenWidth, height: canvasHeight, marginTop: -(insets.top + 127 * headerScale - headerReduction) }]}>
+          <Svg
+            width={screenWidth}
+            height={330 * headerScale}
+            viewBox="0 0 457 330"
             pointerEvents="none"
-            style={[
-              styles.topBackdrop,
-              {
-                top: -184 * scale,
-                left: (screenWidth - 460 * scale) / 2,
-                width: 460 * scale,
-                height: 460 * scale,
-                borderRadius: 230 * scale,
-                transform: [{ scaleX: screenWidth * 1.2 / (460 * scale) }],
-              },
-            ]}
+            preserveAspectRatio="none"
+            style={{ position: 'absolute', top: artworkTop, left: 0 }}
+          >
+            <Ellipse cx={228.5} cy={90} rx={290} ry={240} fill="#424442" />
+          </Svg>
+          <AssetSvg
+            asset={SETTINGS_GEARS}
+            width={gearsWidth}
+            height={gearsWidth * (300 / 530)}
+            pointerEvents="none"
+            style={{ position: 'absolute', top: artworkTop + screenWidth * (118 / 771) + gearsInset * (300 / 530), left: screenWidth * (29 / 771) + gearsInset }}
           />
 
-          <Text style={[styles.pageTitle, { top: 52 * scale, fontSize: 30 * scale }]}>帳戶</Text>
-
-          {isEditingProfile ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="取消編輯帳戶"
-              onPress={handleCancelEditingProfile}
-              hitSlop={12 * scale}
-              style={[
-                styles.cancelButton,
-                {
-                  top: 48 * scale,
-                  left: 24 * scale,
-                  width: 52 * scale,
-                  height: 34 * scale,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                },
-              ]}
-            >
-              <Text style={[styles.cancelText, { fontSize: 16 * scale }]}>取消</Text>
-            </Pressable>
-          ) : null}
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={isEditingProfile ? '完成編輯帳戶' : '編輯帳戶'}
-            onPress={isEditingProfile ? handleFinishEditingProfile : handleStartEditingProfile}
-            hitSlop={12 * scale}
-            style={[
-                styles.editButton,
-                {
-                  top: 48 * scale,
-                right: 24 * scale,
-                width: 52 * scale,
-                height: 34 * scale,
-                alignItems: 'center',
-                justifyContent: 'center',
-              },
-            ]}
-          >
-            <Text style={[styles.editText, { fontSize: 16 * scale }]}>
-              {isEditingProfile ? '完成' : '編輯'}
-            </Text>
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="更換頭像"
-            onPress={isEditingProfile ? handleChangePhoto : undefined}
-            disabled={!isEditingProfile}
-            style={[
-              styles.avatarWrap,
-              {
-                top: 102 * scale,
-                width: 235 * scale,
-                height: 235 * scale,
-                borderRadius: 118 * scale,
-              },
-            ]}
-          >
-            <Avatar
-              imageUri={isEditingProfile ? draftProfileImageUri : profileImageUri}
-              size={235 * scale}
-            />
-          </Pressable>
-
-          <View
-            style={[
-              styles.nameField,
-              {
-                top: 350 * scale,
-                width: 243 * scale,
-                height: 82 * scale,
-              },
-            ]}
-          >
-            <AssetSvg
-              asset={NAME_IMAGE}
-              width={243 * scale}
-              height={82 * scale}
-              pointerEvents="none"
-            />
-            <View
-              pointerEvents={isEditingProfile ? 'auto' : 'none'}
-              style={[
-                styles.nameOverlay,
-                {
-                  top: 30 * scale,
-                  width: 223 * scale,
-                  height: 41 * scale,
-                },
-              ]}
-            >
-              {isEditingProfile ? (
-                <TextInput
-                  accessibilityLabel="輸入姓名"
-                  autoFocus
-                  value={draftName}
-                  onChangeText={setDraftName}
-                  placeholder="Name"
-                  placeholderTextColor="#000000"
-                  maxLength={24}
-                  style={[styles.nameText, styles.nameInput, { fontSize: 18 * scale }]}
-                />
-              ) : (
-                <Text style={[styles.nameText, { fontSize: 18 * scale }]}>
-                  {profileName || 'Name'}
-                </Text>
-              )}
-            </View>
-          </View>
 
           <View
             style={[
               styles.profileSettings,
               {
-                top: PROFILE_SETTINGS_TOP * scale,
+                top: settingsTop,
                 height: PROFILE_SETTINGS_HEIGHT * scale,
               },
             ]}
@@ -752,34 +598,13 @@ export default function Setting() {
               accessibilityRole="button"
               accessibilityLabel="更改自訂群組命名"
               onPress={() => setShowCustomGroupName(true)}
-              style={[styles.settingRow, { top: 0, paddingLeft: 50 * scale, paddingRight: 45 * scale }]}
+              style={[styles.settingRow, { height: 30 * scale, top: 0, paddingLeft: 50 * scale, paddingRight: 45 * scale }]}
             >
-              <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>更改自訂群組命名</Text>
-              <Text style={[styles.chevron, { fontSize: 40 * scale }]}>›</Text>
+              <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>自訂群組</Text>
+              <AssetSvg asset={ARROW_IMAGE} width={10 * scale} height={18 * scale} pointerEvents="none" />
             </Pressable>
 
-            <View style={[styles.settingRow, { top: 58 * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
-              <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>預設股票群組</Text>
-              <ProfileDropdown
-                scale={scale}
-                value={defaultGroupLabel}
-                accessibilityLabel="預設股票群組"
-                disabled={settingsDisabled}
-                onPress={() => setOpenMenu((current) => (current === 'group' ? null : 'group'))}
-              />
-            </View>
-
-            <View style={[styles.settingRow, { top: 112 * scale, paddingLeft: 50 * scale, paddingRight: 53 * scale }]}>
-              <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>行動窗口</Text>
-              <Toggle
-                value={actionWindowEnabled}
-                onPress={() => setActionWindowEnabled((current) => !current)}
-                scale={scale}
-                accessibilityLabel="行動窗口"
-              />
-            </View>
-
-            <View style={[styles.settingRow, { top: 166 * scale, paddingLeft: 50 * scale, paddingRight: 53 * scale }]}>
+            <View style={[styles.settingRow, { height: 30 * scale, top: SETTINGS_ROW_TOPS[1] * scale, paddingLeft: 50 * scale, paddingRight: 53 * scale }]}>
               <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>允許零股</Text>
               <Toggle
                 value={allowFractional}
@@ -790,8 +615,8 @@ export default function Setting() {
               />
             </View>
 
-            <View style={[styles.settingRow, { top: 220 * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
-              <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>更改身分</Text>
+            <View style={[styles.settingRow, { height: 30 * scale, top: SETTINGS_ROW_TOPS[2] * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
+              <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>選擇身分</Text>
               <ProfileDropdown
                 scale={scale}
                 value={identityLabel}
@@ -801,7 +626,7 @@ export default function Setting() {
               />
             </View>
 
-            <View style={[styles.settingRow, { top: 274 * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
+            <View style={[styles.settingRow, { height: 30 * scale, top: SETTINGS_ROW_TOPS[3] * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
               <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>更改資金分配偏好</Text>
               <ProfileDropdown
                 scale={scale}
@@ -812,7 +637,7 @@ export default function Setting() {
               />
             </View>
 
-            <View style={[styles.settingRow, { top: 328 * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
+            <View style={[styles.settingRow, { height: 30 * scale, top: SETTINGS_ROW_TOPS[4] * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
               <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>更改風險偏好</Text>
               <ProfileDropdown
                 scale={scale}
@@ -823,40 +648,42 @@ export default function Setting() {
               />
             </View>
 
-            <View style={[styles.settingRow, { top: 382 * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
-              <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>更改股票最多持有數</Text>
+            <View style={[styles.settingRow, { height: 30 * scale, top: SETTINGS_ROW_TOPS[5] * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
+              <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>更改股票最大持有數</Text>
               <ProfileNumberField
                 scale={scale}
                 value={topN}
                 onChangeText={handleTopNChange}
-                onCommit={commitTopN}
+                onCommit={commitNumbers}
                 onIncrement={() => stepTopN(1)}
                 onDecrement={() => stepTopN(-1)}
                 accessibilityLabel="股票最多持有數"
-                disabled={settingsDisabled}
+                disabled={false}
               />
             </View>
 
-            <View style={[styles.settingRow, { top: 436 * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
+            <View style={[styles.settingRow, { height: 30 * scale, top: SETTINGS_ROW_TOPS[6] * scale, paddingLeft: 50 * scale, paddingRight: 46 * scale }]}>
               <Text numberOfLines={1} style={[styles.settingLabel, { fontSize: 19 * scale }]}>更改投入預算</Text>
               <ProfileNumberField
                 scale={scale}
                 value={budget}
                 onChangeText={handleBudgetChange}
-                onCommit={commitBudget}
+                onEditingChange={(editing) => { budgetEditing.current = editing; }}
+                onCommit={commitNumbers}
                 onIncrement={() => stepBudget(10000)}
                 onDecrement={() => stepBudget(-10000)}
                 accessibilityLabel="投入預算"
-                disabled={settingsDisabled}
+                disabled={false}
               />
             </View>
+
           </View>
 
           {openMenu && profileMenuOptions[openMenu] ? (
             <ProfileMenu
               scale={scale}
               options={profileMenuOptions[openMenu]}
-              top={(PROFILE_SETTINGS_TOP + profileMenuRowTop[openMenu] + 31) * scale}
+              top={settingsTop + (profileMenuRowTop[openMenu] + 36) * scale}
               right={46 * scale}
               onSelect={(value) => handleProfileMenuPress(openMenu, value)}
             />
@@ -873,6 +700,17 @@ export default function Setting() {
               }}
             />
           </View>
+            {investmentRunPending || profileSaveError || investmentRunError ? <Text
+              accessibilityLiveRegion="polite"
+              numberOfLines={3}
+              style={{ position: 'absolute', top: triggerRulesTop + resolvedTriggerRulesHeight + 12 * scale, left: 30 * scale,
+                right: 30 * scale, fontSize: 12 * scale, lineHeight: 17 * scale,
+                color: profileSaveError || investmentRunError ? '#F0B2B7' : '#D9D9D9' }}
+            >
+              {investmentRunPending
+                ? '正在更新設定並重新計算配置，請稍候…'
+                : profileSaveError || investmentRunError || '輸入完成後按 Enter／完成，或離開欄位即可套用。'}
+            </Text> : null}
         </View>
       </ScrollView>
     </View>
@@ -894,68 +732,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#2E2F2E',
     overflow: 'hidden',
   },
-  topBackdrop: {
+  titleBar: {
     position: 'absolute',
-    backgroundColor: '#D9D9D9',
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#596570',
   },
   pageTitle: {
     position: 'absolute',
     alignSelf: 'center',
-    color: '#2E2F2E',
-    fontFamily: 'Goldman',
-    lineHeight: 38,
-  },
-  editButton: {
-    position: 'absolute',
-    zIndex: 2,
-  },
-  cancelButton: {
-    position: 'absolute',
-    zIndex: 2,
-  },
-  editText: {
-    color: '#F1F1F1',
-    fontFamily: 'Goldman',
-  },
-  cancelText: {
-    color: '#F1F1F1',
-    fontFamily: 'Goldman',
-  },
-  avatarWrap: {
-    position: 'absolute',
-    alignSelf: 'center',
-    zIndex: 2,
-  },
-  avatar: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 118,
-    overflow: 'hidden',
-    backgroundColor: '#2E2F2E',
-  },
-  avatarImage: {
-    width: '100%',
-    height: '100%',
-  },
-  nameField: {
-    position: 'absolute',
-    alignSelf: 'center',
-    zIndex: 3,
-  },
-  nameOverlay: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nameText: {
-    color: '#000000',
-    fontFamily: 'Goldman',
-  },
-  nameInput: {
-    width: '90%',
-    padding: 0,
-    textAlign: 'center',
-    outlineStyle: 'none',
+    color: '#D9D9D9',
+    fontWeight: '400',
   },
   profileSettings: {
     position: 'absolute',
@@ -979,18 +767,17 @@ const styles = StyleSheet.create({
   },
   settingLabel: {
     color: '#F1F1F1',
-    fontFamily: 'Goldman',
     lineHeight: 30,
   },
   toggle: {
     justifyContent: 'center',
-    backgroundColor: '#55DF32',
+    backgroundColor: '#28B32F',
   },
   toggleOn: {
-    backgroundColor: '#55DF32',
+    backgroundColor: '#28B32F',
   },
   toggleOff: {
-    backgroundColor: '#777777',
+    backgroundColor: '#999999',
   },
   toggleDisabled: {
     opacity: 0.55,
@@ -1002,7 +789,7 @@ const styles = StyleSheet.create({
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#7B828B',
+    backgroundColor: '#676A67',
     boxShadow: 'inset -4px -4px 4px rgba(255, 255, 255, 0.25), inset 6px 6px 4px rgba(0, 0, 0, 0.25)',
   },
   profileDropdownDisabled: {
@@ -1010,12 +797,13 @@ const styles = StyleSheet.create({
   },
   numberField: {
     position: 'relative',
+    flexShrink: 0,
     justifyContent: 'center',
-    backgroundColor: '#7B828B',
+    backgroundColor: '#676A67',
     boxShadow: 'inset -4px -4px 4px rgba(255, 255, 255, 0.25), inset 6px 6px 4px rgba(0, 0, 0, 0.25)',
   },
   numberFieldInput: {
-    position: 'absolute',
+    minWidth: 0,
     padding: 0,
     color: '#D9D9D9',
     fontFamily: 'Goldman',

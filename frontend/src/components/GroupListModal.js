@@ -1,477 +1,84 @@
 import React, { useEffect, useState } from 'react';
-import {
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useViewportDimensions from '../hooks/useViewportDimensions';
 
-const GROUP_LIST_LAYOUT = [
-  { symbol: '2002', left: 192.5, top: 88.6991, width: 115 },
-  { symbol: '2330', left: 338.369, top: 108.858, width: 131 },
-  { symbol: '1301', left: 52.3689, top: 121.199, width: 115 },
-  { symbol: '2308', left: 184.5, top: 153.699, width: 131 },
-  { symbol: '2303', left: 52.3689, top: 186.199, width: 115 },
-  { symbol: '2317', left: 338.369, top: 178.858, width: 115 },
-  { symbol: '2412', left: 184.5, top: 218.699, width: 131 },
-  { symbol: '2454', left: 338.369, top: 248.858, width: 131 },
-  { symbol: '2382', left: 52.3689, top: 251.199, width: 115 },
-  { symbol: '2881', left: 184.5, top: 283.699, width: 131 },
-  { symbol: '2603', left: 52.3689, top: 316.199, width: 115 },
-  { symbol: '2882', left: 338.369, top: 318.858, width: 131 },
-  { symbol: '2891', left: 184.5, top: 348.699, width: 131 },
-  { symbol: '2886', left: 36.3689, top: 381.199, width: 131 },
-  { symbol: '2892', left: 338.369, top: 388.858, width: 131 },
-  { symbol: '3034', left: 192.5, top: 413.699, width: 115 },
-];
-
-function findStock(stocks, symbol) {
-  return stocks?.find((stock) => String(stock.symbol) === symbol);
-}
-
-export default function GroupListModal({
-  visible,
-  onClose,
-  stocks = [],
-  title = '未命名',
-  groupName = '',
-  onGroupNameChange,
-  nameError = '',
-  selectedSymbols = [],
-  onConfirm,
-}) {
-  const { width: screenWidth, height: screenHeight } = useViewportDimensions();
-  const groupListWidth = Math.min(500, screenWidth * 0.82);
-  const groupListHeight = groupListWidth * (557 / 500);
-  const groupListScale = groupListWidth / 500;
-  const modalLeft = Math.max(0, (screenWidth - groupListWidth) / 2);
-  const modalTop = Math.max(0, (screenHeight - groupListHeight) / 2);
-  const normalizedSelectedSymbols = Array.isArray(selectedSymbols)
-    ? selectedSymbols.map((symbol) => String(symbol))
-    : [];
-  const [draftSelectedSymbols, setDraftSelectedSymbols] = useState(
-    normalizedSelectedSymbols,
-  );
-  const isNameEditable = typeof onGroupNameChange === 'function';
-  const hasNameError = Boolean(String(nameError || '').trim());
-  const selectedSymbolsKey = Array.from(
-    new Set(normalizedSelectedSymbols),
-  )
-    .sort()
-    .join('|');
-
+export default function GroupListModal({ visible, onClose, stocks = [], title = '未命名', groupName = '', onGroupNameChange, nameError = '', selectedSymbols = [], minSelection = 1, onConfirm }) {
+  const { width, height } = useViewportDimensions();
+  const insets = useSafeAreaInsets();
+  const modalWidth = Math.min(500, width * 0.82);
+  const scale = modalWidth / 500;
+  const itemHeight = Math.max(28, 40 * scale);
+  const gap = 20 * scale;
+  const rowCount = Math.ceil(stocks.length / 2);
+  const headerHeight = Math.max(58, 88 * scale);
+  const footerHeight = Math.max(78, 104 * scale);
+  const contentHeight = rowCount * itemHeight + Math.max(0, rowCount - 1) * gap + 30 * scale;
+  const modalHeight = Math.min(height - insets.top - insets.bottom - 32, headerHeight + contentHeight + footerHeight);
+  const [selected, setSelected] = useState([]);
+  const selectedKey = [...new Set(selectedSymbols.map(String))].sort().join('|');
   useEffect(() => {
-    if (visible) {
-      // 只在視窗開啟或外部選取清單真的改變時初始化。輸入群組名稱會讓
-      // 父層重新渲染，但不能因此把視窗內暫存的股票選取清空。
-      setDraftSelectedSymbols(selectedSymbolsKey ? selectedSymbolsKey.split('|') : []);
-    }
-  }, [selectedSymbolsKey, visible]);
-
-  const selectedSymbolSet = new Set(
-    draftSelectedSymbols.map((symbol) => String(symbol)),
-  );
-
-  const toggleStock = (symbol) => {
-    const normalizedSymbol = String(symbol);
-    setDraftSelectedSymbols((current) => {
-      const currentSymbols = current.map((item) => String(item));
-      return currentSymbols.includes(normalizedSymbol)
-        ? currentSymbols.filter((item) => item !== normalizedSymbol)
-        : [...currentSymbols, normalizedSymbol];
-    });
-  };
-
-  const handleConfirm = () => {
-    if (!draftSelectedSymbols.length || hasNameError) return;
-    if (onConfirm) {
-      onConfirm([...draftSelectedSymbols]);
-    } else {
-      onClose?.();
-    }
-  };
-
-  const displayTitle = String(title || '').trim() || '未命名';
-
-  return (
-    <Modal
-      transparent
-      visible={visible}
-      animationType="none"
-      statusBarTranslucent
-      onRequestClose={onClose}
-    >
-      <View style={styles.overlay}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="關閉群組清單"
-          onPress={onClose}
-          style={styles.dim}
-        />
-
-        <View
-          style={[
-            styles.modal,
-            {
-              width: groupListWidth,
-              height: groupListHeight,
-              left: modalLeft,
-              top: modalTop,
-            },
-          ]}
-        >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="關閉群組清單"
-            onPress={onClose}
-            style={[
-              styles.closeButton,
-              {
-                width: 60 * groupListScale,
-                height: 60 * groupListScale,
-              },
-            ]}
-          >
-            <View
-              pointerEvents="none"
-              style={[
-                styles.closeBar,
-                {
-                  width: 28 * groupListScale,
-                  height: 5 * groupListScale,
-                },
-              ]}
-            />
-            <View
-              pointerEvents="none"
-              style={[
-                styles.closeBar,
-                styles.closeBarSecond,
-                {
-                  width: 28 * groupListScale,
-                  height: 5 * groupListScale,
-                },
-              ]}
-            />
+    if (visible) setSelected(selectedKey ? selectedKey.split('|') : []);
+  }, [visible, selectedKey]);
+  const editable = typeof onGroupNameChange === 'function';
+  const disabled = selected.length < minSelection || Boolean(nameError);
+  const toggle = (symbol) => setSelected((current) => current.includes(symbol) ? current.filter((id) => id !== symbol) : [...current, symbol]);
+  const confirm = () => { if (!disabled) { if (onConfirm) onConfirm([...selected]); else onClose?.(); } };
+  return <Modal transparent visible={visible} animationType="none" statusBarTranslucent onRequestClose={onClose}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.overlay}>
+      <Pressable accessibilityRole="button" accessibilityLabel="關閉群組清單" style={styles.dim} onPress={onClose} />
+      <View style={[styles.modal, { width: modalWidth, height: modalHeight, maxHeight: '95%' }]}>
+        <View style={{ height: headerHeight, flexShrink: 0, justifyContent: 'center', alignItems: 'center', paddingTop: 18 * scale }}>
+          <Pressable accessibilityRole="button" accessibilityLabel="關閉群組清單" onPress={onClose} style={styles.close}>
+            <View pointerEvents="none" style={[styles.closeBar, { transform: [{ rotate: '45deg' }] }]} />
+            <View pointerEvents="none" style={[styles.closeBar, { transform: [{ rotate: '-45deg' }] }]} />
           </Pressable>
-
-          <View
-            pointerEvents={isNameEditable ? 'box-none' : 'none'}
-            style={[
-              styles.titleWrap,
-              {
-                height: 38 * groupListScale,
-              },
-            ]}
-          >
-            {isNameEditable ? (
-              <TextInput
-                accessibilityLabel="自訂群組名稱"
-                value={groupName}
-                onChangeText={onGroupNameChange}
-                placeholder="未命名"
-                placeholderTextColor="rgba(99, 96, 96, 0.55)"
-                maxLength={24}
-                style={[
-                  styles.title,
-                  styles.titleInput,
-                  {
-                    top: 8 * groupListScale,
-                    height: 32 * groupListScale,
-                    fontSize: 20 * groupListScale,
-                    lineHeight: 24 * groupListScale,
-                  },
-                ]}
-              />
-            ) : (
-              <Text
-                numberOfLines={1}
-                style={[
-                  styles.title,
-                  {
-                    top: 14 * groupListScale,
-                    fontSize: 20 * groupListScale,
-                    lineHeight: 24 * groupListScale,
-                  },
-                ]}
-              >
-                {displayTitle}
-              </Text>
-            )}
-            <View
-              style={[
-                styles.titleUnderline,
-                {
-                  left: 184.5 * groupListScale,
-                  top: 35.3368 * groupListScale,
-                  width: 131.267 * groupListScale,
-                  height: 2 * groupListScale,
-                },
-              ]}
-            />
+          {editable ? <TextInput accessibilityLabel="自訂群組名稱" value={groupName} onChangeText={onGroupNameChange} placeholder="未命名" placeholderTextColor="#999999" maxLength={24} returnKeyType="done"
+            style={[styles.title, { fontSize: Math.max(15, 20 * scale), width: modalWidth * 0.27 }]} />
+            : <Text numberOfLines={1} style={[styles.title, { fontSize: Math.max(15, 20 * scale), width: modalWidth * 0.27 }]}>{title || '未命名'}</Text>}
+          {Boolean(nameError) && <Text accessibilityLiveRegion="polite" style={styles.error}>{nameError}</Text>}
+        </View>
+        <ScrollView style={{ flex: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator
+          contentContainerStyle={{ paddingHorizontal: modalWidth * 0.1, paddingBottom: 30 * scale }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: gap }}>
+            {stocks.map((stock) => {
+              const symbol = String(stock.symbol), checked = selected.includes(symbol);
+              return <Pressable key={symbol} accessibilityRole="checkbox" accessibilityLabel={`${symbol} ${stock.name}`} accessibilityState={{ checked }} onPress={() => toggle(symbol)}
+                style={[styles.stock, { width: '45%', height: itemHeight, borderRadius: 10 * scale }, checked && styles.selected]}>
+                <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.stockText, { fontSize: Math.max(12, 18 * scale) }]}>{symbol} {stock.name}</Text>
+              </Pressable>;
+            })}
           </View>
-
-          {hasNameError ? (
-            <Text
-              pointerEvents="none"
-              style={[
-                styles.nameError,
-                {
-                  top: 43 * groupListScale,
-                  fontSize: 13 * groupListScale,
-                  lineHeight: 16 * groupListScale,
-                },
-              ]}
-            >
-              {nameError}
-            </Text>
-          ) : null}
-
-          {GROUP_LIST_LAYOUT.map((layout) => {
-            const stock = findStock(stocks, layout.symbol);
-            const label = stock?.name
-              ? `${layout.symbol} ${stock.name}`
-              : layout.symbol;
-
-            return (
-              <Pressable
-                key={layout.symbol}
-                accessibilityRole="checkbox"
-                accessibilityLabel={label}
-                accessibilityState={{ checked: selectedSymbolSet.has(layout.symbol) }}
-                onPress={() => toggleStock(layout.symbol)}
-                style={[
-                  styles.groupItem,
-                  {
-                    left: layout.left * groupListScale,
-                    top: layout.top * groupListScale,
-                    width: layout.width * groupListScale,
-                    height: 40 * groupListScale,
-                    borderRadius: 10 * groupListScale,
-                  },
-                  selectedSymbolSet.has(layout.symbol) && styles.groupItemSelected,
-                ]}
-              >
-                <Text
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  style={[
-                    styles.groupItemText,
-                    {
-                      fontSize: 17 * groupListScale,
-                      lineHeight: 21 * groupListScale,
-                    },
-                    selectedSymbolSet.has(layout.symbol) && styles.groupItemTextSelected,
-                  ]}
-                >
-                  {label}
-                </Text>
-              </Pressable>
-            );
-          })}
-
-          <View
-            pointerEvents="none"
-            style={[
-              styles.divider,
-              {
-                top: 469.83 * groupListScale,
-                height: 2 * groupListScale,
-              },
-            ]}
-          />
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="清空目前所選"
-            onPress={() => setDraftSelectedSymbols([])}
-            style={({ pressed }) => [
-              styles.cancelButton,
-              {
-                left: 128 * groupListScale,
-                top: 494.83 * groupListScale,
-                width: 80 * groupListScale,
-                height: 40 * groupListScale,
-                borderRadius: 10 * groupListScale,
-              },
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text
-              pointerEvents="none"
-              style={[
-                styles.confirmText,
-                {
-                  fontSize: 20 * groupListScale,
-                  lineHeight: 25 * groupListScale,
-                },
-              ]}
-            >
-              取消
-            </Text>
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="儲存群組"
-            accessibilityState={{
-              disabled: !draftSelectedSymbols.length || hasNameError,
-            }}
-            disabled={!draftSelectedSymbols.length || hasNameError}
-            onPress={handleConfirm}
-            style={({ pressed }) => [
-              styles.confirmButton,
-              {
-                left: 292 * groupListScale,
-                top: 494.83 * groupListScale,
-                width: 80 * groupListScale,
-                height: 40 * groupListScale,
-                borderRadius: 10 * groupListScale,
-              },
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text
-              pointerEvents="none"
-              style={[
-                styles.confirmText,
-                {
-                  fontSize: 20 * groupListScale,
-                  lineHeight: 25 * groupListScale,
-                },
-              ]}
-            >
-              儲存
-            </Text>
-          </Pressable>
+        </ScrollView>
+        <View style={[styles.footer, { height: footerHeight }]}>
+          {minSelection > 1 && selected.length < minSelection && <Text accessibilityLiveRegion="polite" style={styles.hint}>{minSelection === 3 ? '自訂群組請至少選擇三股以上' : `自訂群組請至少選擇 ${minSelection} 檔股票`}</Text>}
+          <View style={{ flexDirection: 'row', justifyContent: 'space-evenly', width: '100%' }}>
+            <Pressable accessibilityRole="button" accessibilityLabel="取消新增群組" onPress={onClose} style={[styles.button, { width: Math.max(60, 80 * scale), height: Math.max(34, 40 * scale) }]}>
+              <Text style={[styles.buttonText, { fontSize: Math.max(15, 20 * scale) }]}>取消</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="儲存群組" disabled={disabled} accessibilityState={{ disabled }} onPress={confirm}
+              style={[styles.button, { width: Math.max(60, 80 * scale), height: Math.max(34, 40 * scale), opacity: disabled ? 0.4 : 1 }]}>
+              <Text style={[styles.buttonText, { fontSize: Math.max(15, 20 * scale) }]}>儲存</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
-    </Modal>
-  );
+    </KeyboardAvoidingView>
+  </Modal>;
 }
-
 const styles = StyleSheet.create({
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    flex: 1,
-    width: '100%',
-    height: '100%',
-    position: 'relative',
-    zIndex: 100,
-    elevation: 100,
-  },
-  dim: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.42)',
-  },
-  modal: {
-    position: 'absolute',
-    backgroundColor: '#B7B7B7',
-    borderRadius: 10,
-    overflow: 'hidden',
-    zIndex: 1,
-    elevation: 10,
-  },
-  closeButton: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 2,
-    elevation: 2,
-  },
-  closeBar: {
-    position: 'absolute',
-    backgroundColor: '#D9D9D9',
-    borderRadius: 3,
-    transform: [{ rotate: '45deg' }],
-  },
-  closeBarSecond: {
-    transform: [{ rotate: '-45deg' }],
-  },
-  titleWrap: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  title: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    color: 'rgba(99, 96, 96, 0.8)',
-    fontFamily: 'Goldman',
-    fontWeight: '400',
-    textAlign: 'center',
-  },
-  titleUnderline: {
-    position: 'absolute',
-    backgroundColor: '#747272',
-  },
-  titleInput: {
-    padding: 0,
-    outlineStyle: 'none',
-  },
-  nameError: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    color: '#9A4242',
-    fontFamily: 'Goldman',
-    fontWeight: '400',
-    textAlign: 'center',
-  },
-  groupItem: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 2,
-    backgroundColor: '#979797',
-  },
-  groupItemSelected: {
-    backgroundColor: '#727F99',
-    borderWidth: 1.5,
-    borderColor: '#D9D9D9',
-  },
-  groupItemText: {
-    color: '#D9D9D9',
-    fontFamily: 'Goldman',
-    fontWeight: '400',
-    textAlign: 'center',
-  },
-  groupItemTextSelected: {
-    color: '#FFFFFF',
-  },
-  divider: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(46, 47, 46, 0.2)',
-  },
-  confirmButton: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(94, 110, 127, 0.7)',
-  },
-  cancelButton: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(94, 110, 127, 0.7)',
-  },
-  confirmText: {
-    color: 'rgba(255, 255, 255, 0.5)',
-    fontFamily: 'Goldman',
-    fontWeight: '400',
-    textAlign: 'center',
-  },
-  pressed: {
-    opacity: 0.78,
-  },
+  overlay: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  dim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.42)' },
+  modal: { backgroundColor: '#B7B7B7', borderRadius: 10, overflow: 'hidden' },
+  close: { position: 'absolute', left: 0, top: 0, width: 44, height: 44, alignItems: 'center', justifyContent: 'center', zIndex: 2 },
+  closeBar: { position: 'absolute', width: 23, height: 3, borderRadius: 2, backgroundColor: '#D9D9D9' },
+  title: { color: '#8F8D8D', fontFamily: 'Goldman', textAlign: 'center', padding: 0, borderBottomWidth: 2, borderBottomColor: '#858585', outlineStyle: 'none' },
+  error: { color: '#9A4242', fontSize: 12, marginTop: 3 },
+  stock: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3, backgroundColor: '#979797' },
+  selected: { backgroundColor: '#798792' },
+  stockText: { color: '#D9D9D9', fontFamily: 'Goldman', textAlign: 'center' },
+  footer: { flexShrink: 0, borderTopWidth: 1, borderTopColor: 'rgba(46,47,46,0.2)', justifyContent: 'center', alignItems: 'center', gap: 9 },
+  hint: { position: 'absolute', bottom: '100%', width: '100%', textAlign: 'center', color: '#C57979', fontSize: 12, paddingBottom: 2 },
+  button: { borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#798792' },
+  buttonText: { color: '#D9D9D9', fontFamily: 'Goldman' },
 });

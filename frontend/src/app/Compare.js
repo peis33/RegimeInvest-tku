@@ -1,3 +1,4 @@
+import PageHeader from '../components/PageHeader';
 import React, { useEffect, useState } from 'react';
 import {
   Animated,
@@ -13,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AssetSvg from '../components/AssetSvg';
 import { PerformanceComparisonChart } from '../components/StockCharts';
 import { useAppSettings } from '../context/AppSettingsContext';
+import { sortByRecommendation, hasSuggestedPosition } from '../services/portfolioRanking';
 import {
   fetchLatestInvestment,
   fetchLatestStockDetail,
@@ -28,20 +30,34 @@ const COMPARE_BOX_START_IMAGE = require('../assets/image/CompareBox_start.svg');
 const STOCK_OPTIONS = [
   ['2330', '台積電'],
   ['2454', '聯發科'],
-  ['2308', '台達電'],
   ['3034', '聯詠'],
-  ['2382', '廣達'],
-  ['2881', '富邦金'],
+  ['2308', '台達電'],
+  ['3711', '日月光投控'],
+  ['2345', '智邦'],
+  ['6669', '緯穎'],
+  ['2059', '川湖'],
+  ['3008', '大立光'],
+  ['2379', '瑞昱'],
   ['2303', '聯電'],
+  ['2382', '廣達'],
   ['2317', '鴻海'],
   ['2412', '中華電'],
+  ['2603', '長榮'],
+  ['1301', '台塑'],
+  ['3231', '緯創'],
+  ['2356', '英業達'],
+  ['2301', '光寶科'],
+  ['2395', '研華'],
+  ['2881', '富邦金'],
   ['2882', '國泰金'],
   ['2886', '兆豐金'],
   ['2891', '中信金'],
-  ['2002', '中鋼'],
-  ['2603', '長榮'],
-  ['1301', '台塑'],
   ['2892', '第一金'],
+  ['2002', '中鋼'],
+  ['2884', '玉山金'],
+  ['5880', '合庫金'],
+  ['1216', '統一'],
+  ['4904', '遠傳'],
 ].map(([symbol, name]) => ({ symbol, name }));
 
 const COMPARISON_METRICS = [
@@ -114,10 +130,7 @@ function getAllocationInfo(detail, investment) {
   const rows = Array.isArray(investment?.portfolio)
     ? investment.portfolio.filter((row) => !isCashRow(row))
     : [];
-  const activeRows = rows
-    .map((row) => ({ ...row, weight: getPortfolioWeight(row) }))
-    .filter((row) => row.weight !== null && row.weight > 0)
-    .sort((left, right) => right.weight - left.weight);
+  const activeRows = sortByRecommendation(rows).filter(hasSuggestedPosition).slice(0, 5);
   const selectedRow = rows.find((row) => getRowSymbol(row) === normalizeSymbol(detail?.symbol));
   const activeIndex = activeRows.findIndex(
     (row) => getRowSymbol(row) === normalizeSymbol(detail?.symbol),
@@ -180,11 +193,11 @@ function resolveStock(value) {
 
 function getSuggestions(value) {
   const query = String(value || '').trim().toLowerCase();
-  if (!query) return STOCK_OPTIONS.slice(0, 8);
+  if (!query) return STOCK_OPTIONS;
 
   return STOCK_OPTIONS.filter(
     (stock) => stock.symbol.includes(query) || stock.name.toLowerCase().includes(query),
-  ).slice(0, 8);
+  );
 }
 
 function StockInputSlot({
@@ -216,7 +229,7 @@ function StockInputSlot({
           width={width}
           height={slotHeight}
           pointerEvents="none"
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
         />
         <View
           style={[
@@ -255,7 +268,12 @@ function StockInputSlot({
         />
       </View>
       {active && String(value || '').trim() ? (
-        <View style={[styles.suggestionList, { width: inputWidth, top: slotHeight + 4 * scale, maxHeight: 230 * scale }]}>
+        <ScrollView
+          style={[styles.suggestionList, { width: inputWidth, top: slotHeight + 4 * scale, maxHeight: 230 * scale }]}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+        >
           {suggestions.map((stock) => (
             <Pressable
               key={stock.symbol}
@@ -267,7 +285,7 @@ function StockInputSlot({
               <Text style={[styles.suggestionText, { fontSize: 13 * scale }]}>{stock.symbol} {stock.name}</Text>
             </Pressable>
           ))}
-        </View>
+        </ScrollView>
       ) : null}
     </View>
   );
@@ -442,7 +460,7 @@ function StockResultCard({ data, width }) {
         width={width}
         height={height}
         pointerEvents="none"
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
       />
       <View
         style={[
@@ -521,6 +539,8 @@ export default function Compare() {
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const {
     investmentResult,
+    investmentRunPending,
+    investmentRunError,
     compareGroups,
     addCompareGroup,
     updateCompareGroupSlot,
@@ -533,13 +553,19 @@ export default function Compare() {
   const [latestInvestment, setLatestInvestment] = useState(null);
   const [addCompareLayout, setAddCompareLayout] = useState(null);
   const [started, setStarted] = useState(false);
-  const [comparison, setComparison] = useState(null);
+  const [comparisonSource, setComparison] = useState(null);
   const [loadingGroup, setLoadingGroup] = useState(null);
   const [error, setError] = useState(null);
 
-  const investment = investmentResult || latestInvestment;
+  const investment = investmentRunPending || investmentRunError ? null : investmentResult || latestInvestment;
+  // Recompute allocation metrics on every context update, not only on button press.
+  const comparison = comparisonSource?.map(item => buildComparisonData(item.detail, investment, item.chartData));
 
   useEffect(() => {
+    if (investmentRunPending || investmentRunError) {
+      setLatestInvestment(null);
+      return undefined;
+    }
     if (investmentResult) {
       setLatestInvestment(investmentResult);
       return undefined;
@@ -557,7 +583,7 @@ export default function Compare() {
     return () => {
       active = false;
     };
-  }, [investmentResult]);
+  }, [investmentResult, investmentRunPending, investmentRunError]);
 
   const panelMargin = 14 * uiScale;
   const panelPadding = 14 * uiScale;
@@ -638,6 +664,7 @@ export default function Compare() {
   if (started && comparison) {
     return (
       <View style={[styles.container, { width: screenWidth }]}>
+        <PageHeader title="對比" onBack={goBackToSelection} />
         <ScrollView
           style={styles.screenScroll}
           horizontal={false}
@@ -651,33 +678,7 @@ export default function Compare() {
           }}
         >
           <View style={[styles.resultPage, { minHeight: 900 * uiScale }]}>
-            <View style={[styles.header, { height: 118 * uiScale }]}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="返回股票選擇"
-                onPress={goBackToSelection}
-                style={[styles.backButton, { left: 18 * uiScale, top: 60 * uiScale, padding: 4 * uiScale }]}
-              >
-                <AssetSvg
-                  asset={BACK_IMAGE}
-                  width={38 * uiScale}
-                  height={38 * uiScale}
-                  pointerEvents="none"
-                />
-              </Pressable>
-              <Text
-                style={[
-                  styles.headerTitle,
-                  {
-                    fontSize: 30 * uiScale,
-                    lineHeight: 38 * uiScale,
-                    transform: [{ translateY: headerContentOffset }],
-                  },
-                ]}
-              >
-                對比
-              </Text>
-            </View>
+
 
             <View style={styles.resultCardsRow}>
               {comparison.map((data) => (
@@ -756,6 +757,7 @@ export default function Compare() {
 
   return (
     <View style={[styles.container, { width: screenWidth }]}>
+      <PageHeader title="對比" />
       <ScrollView
         style={styles.screenScroll}
         horizontal={false}
@@ -774,20 +776,6 @@ export default function Compare() {
         }}
       >
         <View style={styles.selectionPage}>
-          <View style={[styles.header, { height: 118 * uiScale }]}>
-            <Text
-              style={[
-                styles.headerTitle,
-                {
-                  fontSize: 30 * uiScale,
-                  lineHeight: 38 * uiScale,
-                  transform: [{ translateY: headerContentOffset }],
-                },
-              ]}
-            >
-              對比
-            </Text>
-          </View>
           <View style={[styles.selectionSubtitle, { height: 47 * uiScale }]}>
             <Text style={[styles.subtitleText, { fontSize: 16 * uiScale }]}>最多比較兩股</Text>
           </View>

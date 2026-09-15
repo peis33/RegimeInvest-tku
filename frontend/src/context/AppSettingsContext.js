@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import usePriceAlerts from '../hooks/usePriceAlerts';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const AppSettingsContext = createContext(null);
@@ -113,7 +114,8 @@ export function AppSettingsProvider({
   investmentProfile = null,
   initialAllowFractional = true,
 }) {
-  const [actionWindowEnabled, setActionWindowEnabled] = useState(true);
+  // Session-only UI selection; independent from investor identity/settings.
+  const [analyzeGroupSelection, setAnalyzeGroupSelection] = useState(null);
   const [allowFractional, setAllowFractional] = useState(Boolean(initialAllowFractional));
   const initialAllowFractionalRef = useRef(Boolean(initialAllowFractional));
   const [defaultStockGroup, setDefaultStockGroupState] = useState(null);
@@ -139,9 +141,6 @@ export function AppSettingsProvider({
 
         const storedState = parseStoredState(rawState);
         if (storedState) {
-          if (typeof storedState.actionWindowEnabled === 'boolean') {
-            setActionWindowEnabled(storedState.actionWindowEnabled);
-          }
           if (typeof storedState.allowFractional === 'boolean') {
             setAllowFractional(storedState.allowFractional);
           }
@@ -180,7 +179,6 @@ export function AppSettingsProvider({
 
     const stateToPersist = {
       version: 1,
-      actionWindowEnabled,
       allowFractional,
       defaultStockGroup,
       customGroups,
@@ -208,7 +206,6 @@ export function AppSettingsProvider({
       console.warn('無法儲存預設股票群組', error);
     });
   }, [
-    actionWindowEnabled,
     allowFractional,
     compareGroups,
     customGroups,
@@ -270,6 +267,12 @@ export function AppSettingsProvider({
 
   const updateCustomGroup = useCallback((groupId, changes = {}) => {
     const nextChanges = changes && typeof changes === 'object' ? changes : {};
+    if (Object.prototype.hasOwnProperty.call(nextChanges, 'symbols')) {
+      const symbols = Array.isArray(nextChanges.symbols)
+        ? Array.from(new Set(nextChanges.symbols.map((symbol) => String(symbol).trim()).filter(Boolean)))
+        : [];
+      if (symbols.length < 3) return;
+    }
 
     setCustomGroups((current) => {
       const normalizedName = typeof nextChanges.name === 'string'
@@ -300,6 +303,10 @@ export function AppSettingsProvider({
           : group
       ));
     });
+  }, []);
+
+  const removeCustomGroup = useCallback((groupId) => {
+    setCustomGroups((current) => current.filter((group) => group.id !== groupId));
   }, []);
 
   const renameCustomGroup = useCallback((groupId, name) => {
@@ -363,10 +370,13 @@ export function AppSettingsProvider({
     });
   }, []);
 
+  const priceAlerts = usePriceAlerts(triggerRules, persistentStateReady);
+
   const value = useMemo(
     () => ({
-      actionWindowEnabled,
-      setActionWindowEnabled,
+      analyzeGroupSelection,
+      setAnalyzeGroupSelection,
+      priceAlerts,
       allowFractional,
       setAllowFractional,
       defaultStockGroup,
@@ -387,6 +397,7 @@ export function AppSettingsProvider({
       customGroups,
       addCustomGroup,
       updateCustomGroup,
+      removeCustomGroup,
       renameCustomGroup,
       compareGroups,
       addCompareGroup,
@@ -398,7 +409,8 @@ export function AppSettingsProvider({
       removeTriggerRule,
     }),
     [
-      actionWindowEnabled,
+      analyzeGroupSelection,
+      priceAlerts,
       allowFractional,
       defaultStockGroup,
       setDefaultStockGroup,
@@ -418,6 +430,7 @@ export function AppSettingsProvider({
       customGroups,
       addCustomGroup,
       updateCustomGroup,
+      removeCustomGroup,
       renameCustomGroup,
       compareGroups,
       addCompareGroup,

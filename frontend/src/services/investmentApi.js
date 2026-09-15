@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { submitConfiguration } from './configurationWait';
 
 const configuredBaseUrl =
   typeof process !== 'undefined' && process.env
@@ -7,7 +8,9 @@ const configuredBaseUrl =
 
 const webHostBaseUrl =
   typeof window !== 'undefined' && window.location?.hostname
-    ? `${window.location.protocol || 'http:'}//${window.location.hostname}:8000`
+    ? window.location.protocol === 'https:'
+      ? `${window.location.origin}/api`
+      : `${window.location.protocol || 'http:'}//${window.location.hostname}:8000`
     : 'http://localhost:8000';
 
 const defaultBaseUrl =
@@ -56,7 +59,10 @@ async function parseResponse(response) {
       typeof detail === 'string'
         ? detail
         : detail?.user_message || detail?.message || JSON.stringify(detail || body);
-    throw new Error(message || `後端回應錯誤（${response.status}）`);
+    const error = new Error(message || `後端回應錯誤（${response.status}）`);
+    error.code = detail?.code;
+    error.status = response.status;
+    throw error;
   }
 
   return body;
@@ -110,6 +116,10 @@ export async function fetchLatestStockCharts(stockId, limit = 90) {
 }
 
 export async function runInvestment(profile) {
+  return submitConfiguration(profile, submitInvestment, fetchLatestInvestment);
+}
+
+async function submitInvestment(profile) {
   const response = await fetchWithTimeout(
     `${API_BASE_URL}/api/investment/run`,
     {
@@ -125,9 +135,9 @@ export async function runInvestment(profile) {
   return parseResponse(response);
 }
 
-export async function runDiscussion() {
+export async function runDiscussion({ force = false } = {}) {
   const response = await fetchWithTimeout(
-    `${API_BASE_URL}/api/investment/discussion`,
+    `${API_BASE_URL}/api/investment/discussion?force=${force ? 'true' : 'false'}`,
     {
       method: 'POST',
       headers: {

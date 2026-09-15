@@ -11,34 +11,18 @@ import {
   View,
 } from 'react-native';
 import AssetSvg from './AssetSvg';
+import { STOCKS } from '../data/stocks';
 import { useAppSettings } from '../context/AppSettingsContext';
 import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const DROPDOWN_ARROW_IMAGE = require('../assets/image/DropdownArrow.svg');
 
-const COMPANY_OPTIONS = [
-  '台積電',
-  '聯發科',
-  '聯詠',
-  '台達電',
-  '廣達',
-  '富邦金',
-  '聯電',
-  '鴻海',
-  '中華電',
-  '國泰金',
-  '兆豐金',
-  '中信金',
-  '中鋼',
-  '長榮',
-  '台塑',
-  '第一金',
-];
+const COMPANY_OPTIONS = STOCKS.map((stock) => stock.name);
 
 function Toggle({ value, onPress, scale = 1, disabled = false }) {
-  const width = 63 * scale;
-  const height = 23 * scale;
-  const thumbSize = 21 * scale;
+  const width = 56 * scale;
+  const height = 28 * scale;
+  const thumbSize = 23 * scale;
 
   return (
     <Pressable
@@ -78,12 +62,16 @@ function NumericField({
   radius = 50,
   containerStyle,
   editable = true,
+  accessibilityLabel,
+  maxLength = 8,
+  inputPadding = 10,
 }) {
-  const height = 26 * scale;
+  const height = 25 * scale;
 
   return (
     <View style={[styles.inputFrame, { width, height, borderRadius: radius }, containerStyle]}>
       <TextInput
+        accessibilityLabel={accessibilityLabel}
         value={value}
         onChangeText={onChangeText}
         editable={editable}
@@ -96,10 +84,11 @@ function NumericField({
             fontSize: 16 * scale,
             lineHeight: 22 * scale,
             borderRadius: radius,
+            paddingHorizontal: inputPadding * scale,
           },
         ]}
         textAlign="center"
-        maxLength={8}
+        maxLength={maxLength}
       />
       <View
         pointerEvents="none"
@@ -389,7 +378,7 @@ function RuleForm({
             },
           ]}
         >
-          <Text style={[styles.label, { fontSize: 21 * uiScale, lineHeight: 30 * uiScale }]}>觸價警示</Text>
+          <Text style={[styles.label, { fontSize: 19 * uiScale, lineHeight: 30 * uiScale }]}>觸價警示</Text>
           <Toggle
             value={alertEnabled}
             onPress={onToggleAlert}
@@ -405,13 +394,14 @@ function RuleForm({
           {
             width: pickerWidth,
             height: pickerHeight,
-            marginTop: 10 * uiScale,
+            marginTop: 19 * uiScale,
             alignSelf: 'center',
             zIndex: menuOpen ? 50 : 1,
           },
           !alertEnabled ? styles.hidden : null,
         ]}
         ref={pickerRef}
+        collapsable={false}
       >
         <Pressable
           accessibilityRole="button"
@@ -430,6 +420,7 @@ function RuleForm({
                 marginLeft: 20 * uiScale,
                 marginRight: 42 * uiScale,
                 fontSize: 16 * uiScale,
+                lineHeight: 24 * uiScale,
                 textAlign: 'left',
               },
               rule.selectedCompany ? styles.companySelected : null,
@@ -447,36 +438,38 @@ function RuleForm({
         </Pressable>
       </View>
 
-      <View style={[styles.fieldGroup, { marginTop: 25 * uiScale, paddingLeft: 53 * uiScale }, !alertEnabled ? styles.hidden : null]}>
+      <View style={[styles.fieldGroup, { marginTop: 27 * uiScale, paddingLeft: 46 * uiScale }, !alertEnabled ? styles.hidden : null]}>
         <View style={[styles.fieldRow, { height: 26 * uiScale, marginBottom: 11 * uiScale }]}>
-          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>股價高達 $</Text>
-          <NumericField value={rule.highPrice} onChangeText={(value) => update('highPrice', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
+          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 96 * uiScale, flexShrink: 0, marginRight: 7 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>收盤高達 $</Text>
+          <NumericField accessibilityLabel="收盤高達金額" value={rule.highPrice} onChangeText={(value) => update('highPrice', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
         </View>
         <View style={[styles.fieldRow, { height: 26 * uiScale }]}>
-          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>股價低於 $</Text>
-          <NumericField value={rule.lowPrice} onChangeText={(value) => update('lowPrice', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
+          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 96 * uiScale, flexShrink: 0, marginRight: 7 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>收盤低於 $</Text>
+          <NumericField accessibilityLabel="收盤低於金額" value={rule.lowPrice} onChangeText={(value) => update('lowPrice', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
         </View>
       </View>
 
-      <View style={[styles.fieldGroup, styles.volumeGroup, { marginTop: 16 * uiScale, paddingLeft: 53 * uiScale }, !alertEnabled ? styles.hidden : null]}>
+      <View style={[styles.fieldGroup, styles.volumeGroup, { marginTop: 17 * uiScale, paddingLeft: 46 * uiScale }, !alertEnabled ? styles.hidden : null]}>
         <View style={[styles.fieldRow, { height: 26 * uiScale, marginBottom: 11 * uiScale }]}>
-          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>成交量大於</Text>
-          <NumericField value={rule.highVolume} onChangeText={(value) => update('highVolume', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
+          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 96 * uiScale, flexShrink: 0, marginRight: 7 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>成交量大於</Text>
+          <NumericField accessibilityLabel="成交量大於門檻，單位千股" value={rule.highVolume} onChangeText={(value) => update('highVolume', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
+          <Text style={{ color: '#F1F1F1', fontSize: textSize, marginLeft: 8 * uiScale, flexShrink: 0 }}>千股</Text>
         </View>
         <View style={[styles.fieldRow, { height: 26 * uiScale }]}>
-          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 82 * uiScale, marginRight: 4 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>成交量大於</Text>
-          <NumericField value={rule.lowVolume} onChangeText={(value) => update('lowVolume', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
+          <Text numberOfLines={1} style={[styles.fieldLabel, { width: 96 * uiScale, flexShrink: 0, marginRight: 7 * uiScale, fontSize: textSize, lineHeight: 26 * uiScale }]}>成交量小於</Text>
+          <NumericField accessibilityLabel="成交量小於門檻，單位千股" value={rule.lowVolume} onChangeText={(value) => update('lowVolume', value)} width={inputWidth} scale={uiScale} editable={!isDeleteMode} />
+          <Text style={{ color: '#F1F1F1', fontSize: textSize, marginLeft: 8 * uiScale, flexShrink: 0 }}>千股</Text>
         </View>
       </View>
 
-      <View style={[styles.dateRow, { marginTop: 26 * uiScale, paddingLeft: 40 * uiScale }, !alertEnabled ? styles.hidden : null]}>
-        <Text style={[styles.dateLabel, { fontSize: Math.min(15, textSize), lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>至</Text>
-        <NumericField value={rule.year} onChangeText={(value) => update('year', value)} width={dateInputWidth} scale={uiScale} radius={5} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
-        <Text style={[styles.dateLabel, { fontSize: Math.min(15, textSize), lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>年</Text>
-        <NumericField value={rule.month} onChangeText={(value) => update('month', value)} width={dateInputWidth} scale={uiScale} radius={5} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
-        <Text style={[styles.dateLabel, { fontSize: Math.min(15, textSize), lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>月</Text>
-        <NumericField value={rule.day} onChangeText={(value) => update('day', value)} width={dateInputWidth} scale={uiScale} radius={5} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
-        <Text numberOfLines={1} style={[styles.dateLabel, { fontSize: Math.min(15, textSize), lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>日 為止</Text>
+      <View style={[styles.dateRow, { marginTop: 27 * uiScale, justifyContent: 'center' }, !alertEnabled ? styles.hidden : null]}>
+        <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>至 西元</Text>
+        <NumericField accessibilityLabel="截止西元年份" maxLength={4} inputPadding={4} value={rule.year} onChangeText={(value) => update('year', value)} width={76 * uiScale} scale={uiScale} radius={4 * uiScale} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
+        <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>年</Text>
+        <NumericField accessibilityLabel="截止月份" maxLength={2} inputPadding={4} value={rule.month} onChangeText={(value) => update('month', value)} width={dateInputWidth} scale={uiScale} radius={4 * uiScale} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
+        <Text style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>月</Text>
+        <NumericField accessibilityLabel="截止日期" maxLength={2} inputPadding={4} value={rule.day} onChangeText={(value) => update('day', value)} width={dateInputWidth} scale={uiScale} radius={4 * uiScale} editable={!isDeleteMode} containerStyle={{ marginHorizontal: 5 * uiScale }} />
+        <Text numberOfLines={1} style={[styles.dateLabel, { fontSize: textSize, lineHeight: 26 * uiScale, marginHorizontal: 3 * uiScale }]}>日 為止</Text>
       </View>
     </View>
   );
@@ -493,18 +486,19 @@ export default function TriggerRulesSection({
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const {
     triggerRules: rules,
+    priceAlerts,
     addTriggerRule,
     updateTriggerRule,
     removeTriggerRule,
   } = useAppSettings();
   // 以圖二的窄版設定頁作為上限，避免寬螢幕把觸價警示區塊放大到失去比例。
-  const uiScale = Math.min(Math.max(screenWidth / 457, 0.85), 1);
-  const contentWidth = Math.min(358, Math.max(280, screenWidth - 80));
-  const inputWidth = Math.min(102, 108 * uiScale);
-  const dateInputWidth = Math.min(48, 52 * uiScale);
+  const uiScale = Math.min(screenWidth / 457, 1);
+  const contentWidth = 378 * uiScale;
+  const inputWidth = 107 * uiScale;
+  const dateInputWidth = 42 * uiScale;
   const textSize = 16 * uiScale;
-  const pickerWidth = Math.min(216, contentWidth * 0.64);
-  const pickerHeight = 29 * uiScale;
+  const pickerWidth = 228 * uiScale;
+  const pickerHeight = 28 * uiScale;
   const menuWidth = pickerWidth * 0.88;
   const [openDropdown, setOpenDropdown] = useState(null);
   const [deleteModeActive, setDeleteModeActive] = useState(false);
@@ -567,6 +561,21 @@ export default function TriggerRulesSection({
     setOpenDropdown(null);
   };
 
+  if (!alertEnabled) {
+    return (
+      <View onLayout={(event) => onContentHeightChange?.(event.nativeEvent.layout.height)}
+        style={{ width: screenWidth }}>
+        <View style={{ height: 30 * uiScale, flexDirection: 'row',
+          alignItems: 'center', justifyContent: 'space-between',
+          paddingLeft: 50 * uiScale, paddingRight: 53 * uiScale }}>
+        <Text style={[styles.label, { fontSize: 19 * uiScale }]}>觸價警示</Text>
+        <Toggle value={false} onPress={toggleAlert} scale={uiScale} />
+        </View>
+        <Text accessibilityLiveRegion="polite" style={{ color: '#BDBDBD', fontSize: 12 * uiScale, marginTop: 8 * uiScale, marginHorizontal: 50 * uiScale }}>{priceAlerts.message}</Text>
+      </View>
+    );
+  }
+
   return (
     <View
       style={[styles.root, { width: screenWidth }]}
@@ -615,6 +624,7 @@ export default function TriggerRulesSection({
         </SwipeToDelete>
       ))}
 
+
       {!deleteModeActive && hasEnabledRule ? (
         <Pressable
           accessibilityRole="button"
@@ -625,6 +635,11 @@ export default function TriggerRulesSection({
           <Text style={[styles.addRuleText, { fontSize: 26 * uiScale }]}>+</Text>
         </Pressable>
       ) : null}
+
+      <View style={{ width: contentWidth, paddingVertical: 12 }}>
+        <Text style={{ color: '#BDBDBD', fontSize: 12, lineHeight: 18 }}>成交量單位：千股。截止日當天仍有效；留空則持續檢查。開啟或回到 App 時檢查最新資料的收盤價與成交量，通知顯示於首頁，可按 × 關閉或查看多則詳情。</Text>
+        <Text accessibilityLiveRegion="polite" style={{ color: '#BDBDBD', fontSize: 12, lineHeight: 18, marginTop: 6 }}>{priceAlerts.message}</Text>
+      </View>
 
       {deleteModeActive ? (
         <View
@@ -765,7 +780,7 @@ const styles = StyleSheet.create({
     overflow: 'visible',
   },
   dropdownBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0, 0, 0, 0.25)',
   },
   dropdownModalOverlay: {
@@ -801,7 +816,6 @@ const styles = StyleSheet.create({
   },
   companyPlaceholder: {
     color: 'rgba(217, 217, 217, 0.3)',
-    fontFamily: 'Goldman',
     lineHeight: 24,
   },
   companySelected: {
@@ -829,7 +843,6 @@ const styles = StyleSheet.create({
   },
   companyOptionText: {
     color: '#FFFFFF',
-    fontFamily: 'Goldman',
     lineHeight: 20,
   },
   dropdownArrow: {
@@ -849,10 +862,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   toggleOn: {
-    backgroundColor: '#55DF32',
+    backgroundColor: '#28B32F',
   },
   toggleOff: {
-    backgroundColor: '#777777',
+    backgroundColor: '#999999',
   },
   toggleThumb: {
     width: 23,
@@ -868,7 +881,6 @@ const styles = StyleSheet.create({
     marginRight: 1,
   },
   label: {
-    fontFamily: 'Goldman',
     color: '#F1F1F1',
     fontSize: 14,
     lineHeight: 26,
@@ -885,7 +897,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   fieldLabel: {
-    fontFamily: 'Goldman',
     color: '#F1F1F1',
     fontSize: 14,
     lineHeight: 26,
@@ -927,7 +938,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   dateLabel: {
-    fontFamily: 'Goldman',
     color: '#F1F1F1',
     fontSize: 14,
     lineHeight: 26,

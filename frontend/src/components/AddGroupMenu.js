@@ -1,38 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getCustomGroupDisplayName } from '../utils/customGroups';
 import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const PRESSED_FEEDBACK_MS = 120;
-
-const GROUP_ITEMS = [
-  {
-    id: 'semiconductor',
-    label: '半導體產業',
-    fill: 'rgba(217, 217, 217, 0.3)',
-    pushedFill: '#727F99',
-    strokeColor: 'rgba(217, 217, 217, 1)',
-    textOpacity: 1,
-  },
-  {
-    id: 'ElectronicComponents',
-    label: '電子零件產業',
-    fill: '#A0A8C0',
-    pushedFill: '#727F99',
-    strokeColor: 'rgba(217, 217, 217, 1)',
-    textOpacity: 1,
-  },
-  {
-    id: 'FinancialHolding',
-    label: '金控產業',
-    fill: '#A0A8C0',
-    pushedFill: '#727F99',
-    strokeColor: 'rgba(217, 217, 217, 1)',
-    textOpacity: 1,
-  },
-];
 
 const CUSTOM_GROUP_ITEM = {
   id: 'group',
@@ -78,16 +51,6 @@ const ALL_ITEM = {
   strokeColor: 'rgba(217, 217, 217, 1)',
   textOpacity: 1,
 };
-
-const INVESTOR_AND_GROUP_ITEMS = [
-  ...INVESTOR_ITEMS,
-  ...GROUP_ITEMS.map((item) => ({
-    ...item,
-    fill: '#A0A8C0',
-    pushedFill: '#727F99',
-  })),
-  ALL_ITEM,
-];
 
 function ProgrammaticMenuButton({
   item,
@@ -248,7 +211,8 @@ export default function AddGroupMenu({
   anchor = null,
   variant = 'group',
   customGroups = [],
-  includeCategories = false,
+  includeGroups = false,
+  useModal = false,
 }) {
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
@@ -292,14 +256,14 @@ export default function AddGroupMenu({
     textOpacity: 1,
   }));
   const items = isInvestorMenu
-    ? includeCategories
+    ? includeGroups
       ? [
-          ...INVESTOR_AND_GROUP_ITEMS.slice(0, -1),
+          ...INVESTOR_ITEMS,
           ...customGroupItems,
           ALL_ITEM,
         ]
       : INVESTOR_ITEMS
-    : [...GROUP_ITEMS, ...customGroupItems, CUSTOM_GROUP_ITEM];
+    : [...customGroupItems, CUSTOM_GROUP_ITEM];
   const paneScale = isInvestorMenu ? 1 : 1;
   const panelWidth = Math.min(
     isInvestorMenu ? 168 * paneScale : 188,
@@ -325,7 +289,7 @@ export default function AddGroupMenu({
   const baseItemCount = isInvestorMenu ? 3 : 4;
   const groupExtraHeight = Math.max(0, items.length - baseItemCount) * (slotHeight + buttonGap);
   const panelHeight = isInvestorMenu
-    ? basePanelHeight + (includeCategories ? groupExtraHeight : 0)
+    ? basePanelHeight + (includeGroups ? groupExtraHeight : 0)
     : basePanelHeight + groupExtraHeight;
   const panelGap = 0;
   const verticalPad = Math.max(
@@ -336,7 +300,7 @@ export default function AddGroupMenu({
   // button group into the rectangular body instead of centering it in the
   // whole SVG bounding box.
   const triangleHeight = panelWidth * (isInvestorMenu ? 20 / 223 : 36 / 224);
-  const verticalOffset = includeCategories
+  const verticalOffset = includeGroups
     ? 0
     : Math.min(
         triangleHeight * 0.65,
@@ -375,8 +339,7 @@ export default function AddGroupMenu({
   const visiblePanelHeight = Math.min(naturalPanelHeight, availablePanelHeight);
   const isScrollable = naturalPanelHeight > visiblePanelHeight + 0.5;
 
-  return (
-    <>
+  const content = (
       <View style={styles.overlay} pointerEvents="box-none">
         <Pressable
           accessibilityRole="button"
@@ -461,21 +424,37 @@ export default function AddGroupMenu({
             ))}
           </ScrollView>
         </View>
+
       </View>
-    </>
   );
+
+  // A native modal sits above the navigator and scrolling screen. Its anchor
+  // must be measured in window coordinates, rather than a parent's layout.
+  return useModal ? (
+    <Modal
+      transparent
+      visible={visible}
+      animationType="none"
+      statusBarTranslucent
+      onRequestClose={onClose}
+    >
+      <View style={{ flex: 1 }} pointerEvents="box-none">
+        {content}
+      </View>
+    </Modal>
+  ) : content;
 }
 
 const styles = StyleSheet.create({
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 300,
     elevation: 300,
     alignItems: 'flex-start',
     justifyContent: 'flex-start',
   },
   backdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0, 0, 0, 0.42)',
   },
   panelWrap: {

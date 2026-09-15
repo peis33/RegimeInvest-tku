@@ -1042,7 +1042,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   marketRegimeRingCenter: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1096,7 +1096,7 @@ const styles = StyleSheet.create({
   },
   chartPanel: {
     width: '100%',
-    backgroundColor: '#F4F4F4',
+    backgroundColor: '#2E2F2E',
   },
   detailStatus: {
     width: '100%',

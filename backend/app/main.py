@@ -8,24 +8,29 @@ import re
 import subprocess
 import sys
 import threading
+import tempfile
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
+from . import allocation_reuse
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+PROJECT_DIR = BACKEND_DIR.parent
 PIPELINE_DIR = BACKEND_DIR / "regime_invest"
-PIPELINE_FILE = PIPELINE_DIR / "run_all_models_app_v2_2.py"
+DATA_DIR = PIPELINE_DIR
+PIPELINE_FILE = PIPELINE_DIR / "run_all_models_app_FINAL_UPDATED_FIX.py"
 PROFILE_FILE = PIPELINE_DIR / "user_profile.json"
-MODEL3_FILE = PIPELINE_DIR / "model_3_v5_1_final_freeze_candidate.py"
-MODEL3_DISCUSSION_FILE = PIPELINE_DIR / "model_3_v5_1_discussion_output.json"
+MODEL3_FILE = PIPELINE_DIR / "model_3_final_polished.py"
+MODEL3_DISCUSSION_FILE = PIPELINE_DIR / "model_3_final_discussion_output.json"
 MODEL3_STATUS_FILE = PIPELINE_DIR / "model_3_runtime_status.json"
 MODEL1_PREDICTION_FILE = PIPELINE_DIR / "model_1_prediction_output.csv"
 MODEL1_METADATA_FILE = PIPELINE_DIR / "model_1_production_metadata.csv"
@@ -34,9 +39,9 @@ MODEL1_BASE_SCRIPT_FILE = PIPELINE_DIR / "hmm_mta_lstm_sliding_window_experiment
 MODEL1_STRICT_SCRIPT_FILE = PIPELINE_DIR / "hmm_mta_lstm_sliding_window_experiment_v4_strict_rolling.py"
 MODEL1_CACHE_MANIFEST_FILE = PIPELINE_DIR / "model_1_cache_manifest.json"
 MODEL1_PIPELINE_VERSION = "V5_FROZEN_STRICT_CAUSAL_T60_CW_OFF"
-STOCK_DETAIL_FILE = PIPELINE_DIR / "stock_detail_historical.csv"
+STOCK_DETAIL_FILE = DATA_DIR / "stock_detail_historical.csv"
 STOCK_DETAIL_ENCODING = "big5"
-INTERFACE_CHART_FILE = PIPELINE_DIR / "介面圖表全部數據.csv"
+INTERFACE_CHART_FILE = DATA_DIR / "介面圖表全部資料.csv"
 INTERFACE_CHART_ENCODING = "big5"
 MODEL_RUNTIME_TIMEOUT_SECONDS = 1800
 
@@ -66,7 +71,20 @@ app.add_middleware(
 
 # 原始 pipeline 使用固定的 user_profile.json 與固定輸出檔案，
 # 因此目前限制同一時間只執行一個分析。
-pipeline_lock = threading.Lock()
+pipeline_lock = threading.RLock()
+CONFIGURATION_STATE_FILE = PIPELINE_DIR / "configuration_state.json"
+
+
+def read_configuration_state():
+    if not CONFIGURATION_STATE_FILE.exists():
+        return {}
+    return json.loads(CONFIGURATION_STATE_FILE.read_text(encoding="utf-8"))
+
+
+def write_configuration_state(state):
+    temporary = CONFIGURATION_STATE_FILE.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(CONFIGURATION_STATE_FILE)
 
 # 行情 CSV 在每次 `/api/investment/latest` 或個股頁請求時都會被解析。
 # 這些檔案通常只有模型更新時才變動，因此保留進程內快取，並以檔案
@@ -121,6 +139,19 @@ class InvestmentProfile(BaseModel):
     ] = "auto"
     top_n: int = Field(default=5, ge=1, le=20)
     zipf_s: float = Field(default=1.2, gt=0)
+    stock_pool: Literal["small", "normal", "large", "all"] | None = None
+    selection_mode: Literal["all", "custom"] = "all"
+    selected_stock_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_stock_scope(self):
+        self.selected_stock_ids = list(dict.fromkeys(
+            symbol.strip() for symbol in self.selected_stock_ids if symbol.strip()
+        ))
+        if self.selection_mode == "custom" and len(self.selected_stock_ids) < 3:
+            raise ValueError("自選群組至少需要 3 檔股票才能計算配置。")
+        return self
+
 
 
 class AllowFractionalUpdate(BaseModel):
@@ -170,10 +201,12 @@ def write_model3_status(status: str, **details: Any) -> dict:
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         **details,
     }
-    MODEL3_STATUS_FILE.write_text(
+    temporary_status = MODEL3_STATUS_FILE.with_suffix(".json.tmp")
+    temporary_status.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    temporary_status.replace(MODEL3_STATUS_FILE)
     return payload
 
 
@@ -198,6 +231,23 @@ def read_model3_status() -> dict:
             "status": "failed",
             "message": "Model 3 狀態格式錯誤，未使用舊討論結果。",
         }
+    run_id = data.get("run_id", "")
+    if re.fullmatch(r"[0-9a-f]{32}", run_id):
+        progress_file = BACKEND_DIR / "data" / "model3_progress" / f"{run_id}.json"
+        try:
+            data["progress"] = json.loads(progress_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+    if data.get("status") == "failed":
+        progress = data.get("progress", {})
+        calls = progress.get("calls", [])
+        last_error = str(calls[-1].get("error", "")) if calls else ""
+        role = {"risk_seeking": "Qwen", "risk_averse": "Mistral", "judge": "Judge"}.get(progress.get("role"), "模型")
+        if "timed out" in last_error.lower() or "timeout" in last_error.lower():
+            reason = "；前一次建議未通過數值或內容驗證" if progress.get("validation_errors") else ""
+            data["message"] = f"{role} 回覆逾時{reason}。本次討論未完成，原配置保持不變，可重新嘗試。"
+        elif "Traceback" in data.get("message", ""):
+            data["message"] = "AI 討論未通過驗證，本次未產生有效結果，原配置保持不變。"
     return data
 
 
@@ -232,29 +282,16 @@ STOCK_DETAIL_NUMERIC_COLUMNS = tuple(
     if column not in {"證券代碼", "年月日", "TSE 產業別", "上市別"}
 )
 
-INTERFACE_CHART_REQUIRED_COLUMNS = (
-    "證券代碼",
-    "年月日",
-    "開盤價(元)",
-    "最高價(元)",
-    "最低價(元)",
-    "收盤價(元)",
+# 新版介面資料與個股明細共用千元欄位；法人合計由三類買賣超相加。
+INTERFACE_CHART_REQUIRED_COLUMNS = STOCK_DETAIL_REQUIRED_COLUMNS + (
     "報酬率％",
-    "股價漲跌(元)",
-    "成交量(千股)",
-    "外資買賣超(千股)",
-    "自營買賣超(千股)",
-    "投信買賣超(千股)",
-    "合計買賣超(千股)",
-    "融資餘額(張)",
-    "融券餘額(張)",
     "券資比",
 )
 
 INTERFACE_CHART_NUMERIC_COLUMNS = tuple(
     column
     for column in INTERFACE_CHART_REQUIRED_COLUMNS
-    if column not in {"證券代碼", "年月日"}
+    if column not in {"證券代碼", "年月日", "TSE 產業別", "上市別"}
 )
 
 
@@ -501,7 +538,7 @@ def stock_detail_number(row: pd.Series, column: str) -> float | None:
     return float(value)
 
 
-def build_stock_detail(row: pd.Series) -> dict:
+def build_stock_detail(row: pd.Series, source: str = INTERFACE_CHART_FILE.name) -> dict:
     """把 CSV 最新一列轉成前端 StockDetail 使用的欄位。"""
     return {
         "symbol": str(row["stock_id"]),
@@ -527,7 +564,7 @@ def build_stock_detail(row: pd.Series) -> dict:
         "listing": str(row["上市別"]),
         "marketCap": stock_detail_number(row, "市值(百萬元)"),
         "turnoverRate": stock_detail_number(row, "週轉率％"),
-        "source": STOCK_DETAIL_FILE.name,
+        "source": source,
     }
 
 
@@ -535,6 +572,7 @@ def build_stock_chart_data(
     frame: pd.DataFrame,
     stock_id: str,
     limit: int = 90,
+    source: str = INTERFACE_CHART_FILE.name,
 ) -> dict:
     """把 StockDetail CSV 轉成個股三種圖表共用的時間序列。"""
     matched = frame[frame["stock_id"] == stock_id].sort_values("date").copy()
@@ -604,7 +642,7 @@ def build_stock_chart_data(
     return {
         "symbol": stock_id,
         "name": str(matched.iloc[-1]["stock_name"]),
-        "source": STOCK_DETAIL_FILE.name,
+        "source": source,
         "lookback": len(points),
         "points": points,
     }
@@ -632,7 +670,7 @@ def latest_market_snapshot() -> dict | None:
     if matched.empty:
         return None
 
-    return build_stock_detail(matched.iloc[-1])
+    return build_stock_detail(matched.iloc[-1], STOCK_DETAIL_FILE.name)
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -835,6 +873,53 @@ def natural_claims_text(
     return join_chinese(summaries)
 
 
+def verified_stock_facts_text(decision: dict) -> str:
+    """Render program-supplied facts separately from model interpretation."""
+    facts=decision.get('stock_facts')
+    if not isinstance(facts,dict) or not facts:return ''
+    labels={'expected_return':'預期報酬','risk':'風險','selection_score':'選股分數'}
+    lines=['逐股事實表（依資料計算／整理，非模型敘述）：']
+    for asset,row in facts.items():
+        parts=[f"{asset}｜原配置 {row['base_weight_percent']:g}%"]
+        for kind,label in labels.items():
+            metric=row.get('metrics',{}).get(kind)
+            if metric:parts.append(f"{label}：{metric['text']} [{metric['evidence_id']}]")
+        lines.append('；'.join(parts))
+    lines.append('以下增減為判斷性建議，未證明為最佳比例；模型理由需另行檢視。')
+    return '\n'.join(lines)
+
+
+def natural_proposal_text(decision: dict) -> str:
+    """Render exact Model 3 advisory changes for the chat UI."""
+    proposal = decision.get("proposal", {}) if isinstance(decision, dict) else {}
+    rows = proposal.get("changes", []) if isinstance(proposal, dict) else []
+    rendered = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label = row.get("label") or row.get("asset") or "部位"
+        if proposal.get('scope') == 'unapplied_asset_suggestions':
+            delta = safe_float(row.get('delta_weight_pp'))
+            action = '增加' if delta > 0 else '減少' if delta < 0 else '維持'
+            rendered.append(f"{label}建議{action}{abs(delta):.2f} 個百分點（未套用至原配置）")
+            continue
+        base = safe_float(row.get("base_weight_percent"))
+        target = safe_float(row.get("proposed_weight_percent"))
+        delta_pp = safe_float(row.get("delta_weight_pp"))
+        delta_amount = safe_float(row.get("delta_amount"))
+        if delta_pp == 0:
+            action = "維持"
+        elif delta_pp > 0:
+            action = "增加"
+        else:
+            action = "減少"
+        rendered.append(
+            f"{label}{base:.2f}%→{target:.2f}%（{action}{abs(delta_pp):.2f} 個百分點，"
+            f"金額{action}{abs(delta_amount):,.0f} 元）"
+        )
+    return join_chinese(rendered)
+
+
 def build_agent_message(
     key: str,
     role: str,
@@ -878,8 +963,8 @@ def build_agent_message(
     paragraphs = [
         (
             f"{display['speaker']} 在第 {round_number} 輪討論中表示，"
-            f"它比較看好 {preferred}，並優先控制 {avoid}；"
-            f"現金方向為{ACTION_DISPLAY.get(cash_action, cash_action)}，"
+            f"它比較看好 {preferred}，並優先控制 {avoid}；" +
+            ("現金配置留待 Judge 整合，" if decision.get("proposal_scope") == "individual_stock_suggestions" else f"現金方向為{ACTION_DISPLAY.get(cash_action, cash_action)}，") +
             f"整體立場是「{display['stance']}」。"
         ),
         (
@@ -891,6 +976,20 @@ def build_agent_message(
             f"{natural_direction_text(decision.get('directions', {}), rows_by_asset)}。"
         ),
     ]
+    fact_text=verified_stock_facts_text(decision)
+    if fact_text:paragraphs.append(fact_text)
+    if decision.get("weight_change_reasons"):
+        paragraphs.append("逐資產增減理由：" + "；".join(f"{asset_label(a, rows_by_asset)}：{reason}" for a, reason in decision["weight_change_reasons"].items()))
+    if decision.get("selection_reason"):
+        paragraphs.append("增減建議理由：" + decision["selection_reason"])
+    if decision.get("allocation_source") == "program_baseline_fallback":
+        paragraphs = ["本輪模型未產生有效選擇，以下為程式基準配置備援，不代表模型主張，也不計入共識。"]
+    proposal_text = natural_proposal_text(decision)
+    if proposal_text:
+        paragraphs.append(
+            f"逐股調整建議（尚未整合資金配置）：{proposal_text}。"
+            "這些數值為判斷性建議，未證明為最佳比例；Model 2 原始配置仍保留。"
+        )
 
     accepted_text = ""
     rebutted_text = ""
@@ -937,6 +1036,7 @@ def build_agent_message(
                 decision.get("directions", {}),
                 rows_by_asset,
             ),
+            "proposal": proposal_text,
             "accepted_opponent": accepted_text,
             "rebutted_opponent": rebutted_text,
         },
@@ -994,15 +1094,59 @@ def build_judge_message(
         "綜合兩方觀點",
     )
 
-    text = (
+    if decision.get("candidate_origins") or decision.get("judge_fallback"):
+        origins = decision.get("candidate_origins", [])
+        if decision.get("judge_fallback"):
+            winning_side = "程式基準配置備援（非模型裁決）"
+        elif "model2_baseline" in origins or decision.get("baseline_unchanged"):
+            winning_side = "原始基準配置"
+        elif len(decision.get("configuration_matches", [])) == 2:
+            winning_side = "雙方相同的最終配置"
+        elif decision.get("configuration_matches"):
+            winning_side = "Risk-Seeking 最終配置" if decision["configuration_matches"][0] == "risk_seeking" else "Risk-Averse 最終配置"
+        elif "equal_mix_final_proposals" in origins:
+            winning_side = "雙方最終配置的等權混合"
+    proposal_source = decision
+    if not decision.get("proposal"):
+        advisory_rows = discussion.get("advisory_allocation", [])
+        if isinstance(advisory_rows, list) and advisory_rows:
+            proposal_source = {"proposal": {"changes": advisory_rows}}
+    proposal_text = natural_proposal_text(proposal_source)
+    round_count = discussion.get("round_count")
+    consensus_status = discussion.get("consensus_status")
+    stop_reason = discussion.get("stop_reason")
+    if consensus_status == "consensus":
+        discussion_status_text = f"已在第 {round_count} 輪達成共識"
+    elif round_count:
+        discussion_status_text = (
+            f"已完成 {round_count} 輪，仍未完全收斂；已產生最佳努力綜合建議"
+        )
+    else:
+        discussion_status_text = "已產生綜合建議"
+
+    text_parts = [
         f"Llama Judge 綜合兩個模型的意見後，認為本次分析「{decision.get('evaluation', '未提供')}」，"
         f"配置處置為「{decision.get('action', '未提供')}」。"
         f"它建議相對提高 {increase}，降低 {decrease}；"
-        f"最後較採納{winning_side}。\n\n"
-        f"Judge 參考的資料包括：{join_chinese(evidence_sentences)}。"
-        f"未採納的觀點包括：{rejected_claims}。\n\n"
-        "需要注意的是，Model 3 只評估相對方向，實際股票與現金的數值配置仍以 Model 2 的結果為準。"
-    )
+        f"最後較採納{winning_side}。\n"
+        f"討論狀態：{discussion_status_text}（{stop_reason or '完成'}）。\n\n",
+    ]
+    fact_text=verified_stock_facts_text(decision)
+    if fact_text:text_parts.append(fact_text+"\n\n")
+    if decision.get("weight_change_reasons"):
+        text_parts.append("逐資產增減理由：" + "；".join(f"{asset_label(a, rows_by_asset)}：{reason}" for a, reason in decision["weight_change_reasons"].items()) + "。\n")
+    if decision.get("selection_reason"):
+        text_parts.append("增減建議理由：" + decision["selection_reason"] + "。\n\n")
+    if decision.get("judge_fallback"):
+        text_parts[0] = "Judge未產生有效選擇，使用程式基準配置備援；此結果不代表模型成功裁決。\n"
+    if proposal_text:
+        text_parts.append(f"建議增減幅度：{proposal_text}。\n\n")
+    text_parts.extend([
+        f"Judge 參考的資料包括：{join_chinese(evidence_sentences)}。",
+        f"未採納的觀點包括：{rejected_claims}。\n\n",
+        "Model 2 原配置不變；Model 3 為未套用的建議增減幅度，不代表可整套執行。",
+    ])
+    text = "".join(text_parts)
 
     return {
         "id": "judge",
@@ -1022,6 +1166,10 @@ def build_judge_message(
             "increase": increase,
             "decrease": decrease,
             "winning_side": winning_side,
+            "proposal": proposal_text,
+            "round_count": round_count,
+            "consensus_status": consensus_status,
+            "stop_reason": stop_reason,
             "rejected_claims": rejected_claims,
         },
         "claims": {
@@ -1083,7 +1231,34 @@ def build_discussion_messages(
         "claims": {},
     }]
 
-    for key, role, round_number, claim_prefix in AGENT_ROUNDS:
+    dynamic_rounds = discussion.get("rounds")
+    if isinstance(dynamic_rounds, list) and dynamic_rounds:
+        round_specs = []
+        for record in dynamic_rounds:
+            try:
+                round_number = int(record.get("round", 0))
+            except (TypeError, ValueError):
+                continue
+            if round_number <= 0:
+                continue
+            round_specs.extend([
+                (
+                    record.get("risk_seeking_key", f"risk_seeking_round{round_number}"),
+                    "risk_seeking",
+                    round_number,
+                    f"RS{round_number}_",
+                ),
+                (
+                    record.get("risk_averse_key", f"risk_averse_round{round_number}"),
+                    "risk_averse",
+                    round_number,
+                    f"RA{round_number}_",
+                ),
+            ])
+    else:
+        round_specs = list(AGENT_ROUNDS)
+
+    for key, role, round_number, claim_prefix in round_specs:
         decision = structured.get(key)
         if decision:
             messages.append(
@@ -1106,6 +1281,12 @@ def build_discussion_messages(
 
 
 def build_result(profile: dict | None = None) -> dict:
+    configuration = read_configuration_state()
+    if configuration and (not configuration.get("ready") or configuration.get("profile") != profile):
+        raise HTTPException(status_code=409, detail={
+            "code": "configuration_unavailable",
+            "message": "目前設定尚未成功產生配置，請重新計算。",
+        })
     market_rows = read_csv_records(
         PIPELINE_DIR / "model_1_prediction_output.csv"
     )
@@ -1153,11 +1334,15 @@ def build_result(profile: dict | None = None) -> dict:
             }
 
     return {
+        "configuration_id": configuration.get("id"),
         "profile": profile,
         "market": market or None,
         "market_snapshot": latest_market_snapshot(),
         "portfolio": portfolio_rows,
         "discussion": discussion,
+        "advisory_allocation": (
+            discussion.get("advisory_allocation", []) if discussion else []
+        ),
         "discussion_status": discussion_status,
     }
 
@@ -1195,8 +1380,12 @@ def update_allow_fractional(setting: AllowFractionalUpdate) -> dict:
                 detail="使用者投資設定格式錯誤。",
             )
 
+        changed = profile_data.get("allow_fractional") != setting.allow_fractional
         profile_data["allow_fractional"] = setting.allow_fractional
         try:
+            if changed:
+                cancel_active_discussion()
+                write_configuration_state({"id": os.urandom(16).hex(), "profile": profile_data, "ready": False})
             PROFILE_FILE.write_text(
                 json.dumps(profile_data, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -1223,7 +1412,11 @@ def update_allow_fractional(setting: AllowFractionalUpdate) -> dict:
 def latest_stock_detail(stock_id: str) -> dict:
     """回傳指定股票在資料檔中的最新交易日行情。"""
     try:
-        frame = read_stock_detail_frame()
+        frame = (
+            read_stock_detail_frame()
+            if normalize_asset_id(stock_id) == "Y9999"
+            else read_interface_chart_frame()
+        )
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404,
@@ -1244,7 +1437,10 @@ def latest_stock_detail(stock_id: str) -> dict:
         )
 
     return {
-        "data": build_stock_detail(matched.iloc[-1]),
+        "data": build_stock_detail(
+            matched.iloc[-1],
+            STOCK_DETAIL_FILE.name if normalized_id == "Y9999" else INTERFACE_CHART_FILE.name,
+        ),
     }
 
 
@@ -1252,7 +1448,11 @@ def latest_stock_detail(stock_id: str) -> dict:
 def latest_stock_charts(stock_id: str, limit: int = 90) -> dict:
     """回傳指定股票近期 K 線、法人與融資融券圖表資料。"""
     try:
-        frame = read_stock_detail_frame()
+        frame = (
+            read_stock_detail_frame()
+            if normalize_asset_id(stock_id) == "Y9999"
+            else read_interface_chart_frame()
+        )
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404,
@@ -1272,12 +1472,26 @@ def latest_stock_charts(stock_id: str, limit: int = 90) -> dict:
         )
 
     return {
-        "data": build_stock_chart_data(frame, normalized_id, limit),
+        "data": build_stock_chart_data(
+            frame, normalized_id, limit,
+            STOCK_DETAIL_FILE.name if normalized_id == "Y9999" else INTERFACE_CHART_FILE.name,
+        ),
     }
 
 
 @app.get("/api/investment/latest")
 def latest_investment() -> dict:
+    if not pipeline_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail={
+            "code": "configuration_busy", "message": "配置正在更新，請稍候。",
+        })
+    try:
+        return _latest_investment_locked()
+    finally:
+        pipeline_lock.release()
+
+
+def _latest_investment_locked() -> dict:
     try:
         profile = None
         if PROFILE_FILE.exists():
@@ -1299,6 +1513,18 @@ def latest_investment() -> dict:
 
 @app.post("/api/investment/run")
 def run_investment(profile: InvestmentProfile) -> dict:
+    # Keep input changes, output validation and response capture in one transaction.
+    if not pipeline_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail={
+            "code": "configuration_busy", "message": "配置正在更新，請稍候再試。",
+        })
+    try:
+        return _run_investment_locked(profile)
+    finally:
+        pipeline_lock.release()
+
+
+def _run_investment_locked(profile: InvestmentProfile) -> dict:
     if not PIPELINE_FILE.exists():
         raise HTTPException(
             status_code=500,
@@ -1306,12 +1532,38 @@ def run_investment(profile: InvestmentProfile) -> dict:
         )
 
     profile_data = profile.model_dump()
+    # Stop obsolete LLM work before cache hashing or configuration calculation.
+    current_discussion = read_model3_status()
+    if current_discussion.get('profile') != profile_data:
+        cancel_active_discussion()
+        write_model3_status('not_started', profile=profile_data,
+                            message='設定已更新，舊討論已取消，等待新配置。')
     cache_manifest: dict[str, Any] | None = None
     reuse_model1 = False
 
     with pipeline_lock:
         cache_manifest = build_model1_cache_manifest()
         reuse_model1 = model1_cache_is_valid(cache_manifest)
+        reuse_conditions = None
+        try:
+            # Hash environment rather than persist values (which may contain secrets).
+            runtime = hashlib.sha256(json.dumps(dict(os.environ),sort_keys=True).encode()).hexdigest()
+            reuse_conditions = allocation_reuse.signature(PIPELINE_DIR,profile_data,cache_manifest,runtime)
+            state = read_configuration_state()
+            if (reuse_model1 and state.get('ready') and state.get('profile') == profile_data
+                    and allocation_reuse.reusable(PIPELINE_DIR,reuse_conditions)):
+                # Validate the existing output before reusing; no model process starts.
+                payload = build_result(profile_data)
+                queue_discussion(profile_data)  # Existing run is reused; completed runs check fresh news/cache.
+                payload = build_result(profile_data)
+                payload['allocation_cache_hit'] = True
+                return payload
+        except (OSError,ValueError,KeyError):
+            reuse_conditions = None
+        cancel_active_discussion()
+
+        configuration = {"id": os.urandom(16).hex(), "profile": profile_data, "ready": False}
+        write_configuration_state(configuration)
 
         PROFILE_FILE.write_text(
             json.dumps(
@@ -1326,7 +1578,7 @@ def run_investment(profile: InvestmentProfile) -> dict:
         write_model3_status(
             "not_started",
             profile=profile_data,
-            message="配置已重新產生；尚未啟動 AI 討論。",
+            message="正在計算配置，完成後將自動啟動背景 AI 討論。",
         )
 
         process_env = os.environ.copy()
@@ -1393,7 +1645,11 @@ def run_investment(profile: InvestmentProfile) -> dict:
         )
 
     try:
-        payload = build_result(profile_data)
+        with pipeline_lock:
+            configuration["ready"] = True
+            write_configuration_state(configuration)
+            queue_discussion(profile_data)
+            payload = build_result(profile_data)
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=500,
@@ -1408,139 +1664,157 @@ def run_investment(profile: InvestmentProfile) -> dict:
         if latest_manifest == cache_manifest:
             write_model1_cache_manifest(latest_manifest)
 
+    # Save only after the pipeline and output validation have succeeded. The
+    # first calculation establishes a baseline; never retroactively trust old files.
+    try:
+        current_conditions=allocation_reuse.signature(PIPELINE_DIR,profile_data,build_model1_cache_manifest(),runtime)
+        if reuse_conditions is not None and current_conditions == reuse_conditions:
+            allocation_reuse.save(PIPELINE_DIR,current_conditions)
+    except (OSError,ValueError):
+        pass
+    payload['allocation_cache_hit'] = False
+
     return payload
 
 
-@app.post("/api/investment/discussion")
-def run_investment_discussion() -> dict:
-    """使用目前 Model 1/2 結果，手動啟動一次 Model 3 討論。"""
-    if not MODEL3_FILE.exists():
-        raise HTTPException(
-            status_code=500,
-            detail=f"找不到 Model 3 管線：{MODEL3_FILE}",
-        )
+# Serialise LLM work without holding the configuration lock.
+discussion_worker_lock = threading.Lock()
+active_discussion_process = None
 
-    if not PROFILE_FILE.exists():
-        raise HTTPException(
-            status_code=400,
-            detail="尚未完成登入配置，無法啟動 AI 討論。",
-        )
 
+@app.on_event("startup")
+def recover_interrupted_discussion():
+    # In-memory workers cannot survive a backend restart.
+    status = read_model3_status()
+    if status.get("status") in {"queued", "running"}:
+        write_model3_status("not_started", profile=status.get("profile"),
+                            message="後端已重啟，先前討論已中斷，可重新啟動。")
+
+
+def cancel_active_discussion():
+    """Called under pipeline_lock; worker drains pipes and releases its slot."""
+    process = active_discussion_process
+    if process is not None and process.poll() is None:
+        process.terminate()
+        # Escalate only this process if it fails to exit; never kill Ollama.
+        def reap():
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        threading.Thread(target=reap, daemon=True).start()
+
+
+def queue_discussion(profile_data: dict, force: bool = False) -> dict:
+    """Called under pipeline_lock; snapshot inputs before releasing the request."""
+    current = read_model3_status()
+    if current.get("profile") == profile_data and current.get("status") in {"queued", "running"}:
+        return current
+    cancel_active_discussion()
+    run_id = os.urandom(16).hex()
+    progress_dir = BACKEND_DIR / "data" / "model3_progress"
+    progress_dir.mkdir(parents=True, exist_ok=True)
+    snapshot = tempfile.TemporaryDirectory(prefix="regime-discussion-")
     try:
-        profile_data = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"目前使用者設定無法讀取：{exc}",
-        ) from exc
+        base = Path(snapshot.name)
+        for source in (MODEL3_FILE, MODEL1_PREDICTION_FILE, PIPELINE_DIR / "portfolio_allocation_output.csv"):
+            shutil.copy2(source, base / source.name)
+        shutil.copy2(PIPELINE_DIR / 'discussion_cache.py', base / 'discussion_cache.py')
+        (base / 'user_profile.json').write_text(json.dumps(profile_data, ensure_ascii=False), encoding='utf-8')
+    except Exception as exc:
+        snapshot.cleanup()
+        write_model3_status("failed", profile=profile_data, message=f"無法準備背景討論：{exc}")
+        return read_model3_status()
+    write_model3_status("queued", profile=profile_data, run_id=run_id,
+                        message="配置已完成，AI 討論已排入背景執行。")
 
-    started_epoch = time.time()
-
-    with pipeline_lock:
-        current_status = read_model3_status()
-        if current_status.get("status") == "running":
-            raise HTTPException(
-                status_code=409,
-                detail="Model 3 討論正在執行中，請稍候。",
-            )
-
-        write_model3_status(
-            "running",
-            profile=profile_data,
-            started_at=datetime.now().isoformat(timespec="seconds"),
-            message="正在執行 Model 3 AI 討論。",
-        )
-
-        process_env = os.environ.copy()
-        process_env["PYTHONUTF8"] = "1"
-
+    def worker():
+        global active_discussion_process
+        process = None
         try:
-            result = subprocess.run(
-                [sys.executable, str(MODEL3_FILE)],
-                cwd=str(PIPELINE_DIR),
-                env=process_env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=MODEL_RUNTIME_TIMEOUT_SECONDS,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            write_model3_status(
-                "failed",
-                profile=profile_data,
-                message="Model 3 執行超過 30 分鐘；未使用舊討論結果。",
-            )
-            raise HTTPException(
-                status_code=504,
-                detail="Model 3 執行超過 30 分鐘，未使用舊討論結果。",
-            ) from exc
+            with discussion_worker_lock:
+                with pipeline_lock:
+                    if read_model3_status().get("run_id") != run_id:
+                        return
+                    write_model3_status("running", profile=profile_data, run_id=run_id,
+                                        started_at=datetime.now().isoformat(timespec="seconds"),
+                                        message="正在背景執行 Model 3 AI 討論。")
+                    process = subprocess.Popen(
+                        [sys.executable, str(base / MODEL3_FILE.name)],
+                        cwd=str(base), env={**os.environ, "PYTHONUTF8": "1",
+                            "MODEL3_MAX_ROUNDS": "2", "MODEL3_CALL_TIMEOUT": "120",
+                            "MODEL3_TRANSPORT_ATTEMPTS": "1",
+                            "MODEL3_CACHE_DIR": str(BACKEND_DIR / 'data' / 'discussion_cache'),
+                            "MODEL3_FORCE_REFRESH": '1' if force else '0',
+                            "MODEL3_PROGRESS_FILE": str(progress_dir / f"{run_id}.json")},
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        text=True, encoding="utf-8", errors="replace",
+                    )
+                    active_discussion_process = process
+                try:
+                    stdout, stderr = process.communicate(timeout=MODEL_RUNTIME_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate()
+                    raise
+                if process.returncode:
+                    raise RuntimeError((stderr or stdout)[-2000:])
+                output = base / MODEL3_DISCUSSION_FILE.name
+                discussion = json.loads(output.read_text(encoding="utf-8"))
+                if not isinstance(discussion, dict) or not discussion.get("structured_decisions"):
+                    raise ValueError("Model 3 未產生有效討論結果")
+                cache_info = json.loads((base / 'model_3_cache_info.json').read_text(encoding='utf-8'))
+                with pipeline_lock:
+                    if read_model3_status().get("run_id") != run_id:
+                        return
+                    for name in ("model_3_final_output.csv", "model_3_final_discussion_output.json",
+                                 "model_3_advisory_allocation.csv", "model_3_final_production_report.txt",
+                                 "model_3_final_production_audit.csv"):
+                        source = base / name
+                        if source.exists():
+                            destination = PIPELINE_DIR / name
+                            staging = destination.with_suffix(destination.suffix + ".tmp")
+                            shutil.copy2(source, staging)
+                            staging.replace(destination)
+                    write_model3_status(
+                        "completed", profile=profile_data, run_id=run_id,
+                        completed_at=datetime.now().isoformat(timespec="seconds"),
+                        round_count=discussion.get("round_count"),
+                        consensus_status=discussion.get("consensus_status"),
+                        stop_reason=discussion.get("stop_reason"),
+                        cache_hit=bool(cache_info.get('hit')),
+                        original_created_at=discussion.get('created_at'),
+                        cache_key=cache_info.get('key'),
+                        cache_miss=cache_info.get('miss'),
+                        cache_unavailable_reason=cache_info.get('reason'),
+                        message="已載入相同條件的先前討論。" if cache_info.get('hit') else "背景 AI 討論已完成。",
+                    )
+        except Exception as exc:
+            with pipeline_lock:
+                if read_model3_status().get("run_id") == run_id:
+                    write_model3_status("failed", profile=profile_data, run_id=run_id,
+                                        message=f"背景 AI 討論失敗：{exc}")
+        finally:
+            with pipeline_lock:
+                if active_discussion_process is process:
+                    active_discussion_process = None
+            snapshot.cleanup()
 
-        if result.returncode != 0:
-            missing_dependencies = extract_missing_dependencies(
-                result.stdout,
-                result.stderr,
-            )
-            diagnostic = (result.stderr or result.stdout)[-2000:]
-            if missing_dependencies:
-                display_names = [
-                    MODEL_DEPENDENCY_LABELS.get(name, name)
-                    for name in missing_dependencies
-                ]
-                message = (
-                    "目前缺少 Model 3 依賴："
-                    + "、".join(display_names)
-                    + "；未使用舊討論結果。"
-                )
-            else:
-                message = "Model 3 討論執行失敗；未使用舊討論結果。"
+    threading.Thread(target=worker, name=f"model3-{run_id}", daemon=True).start()
+    return read_model3_status()
 
-            write_model3_status(
-                "failed",
-                profile=profile_data,
-                message=message,
-                diagnostic=diagnostic,
-            )
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "message": "Model 3 討論執行失敗",
-                    "user_message": message,
-                    "missing_dependencies": missing_dependencies,
-                    "return_code": result.returncode,
-                    "diagnostic": diagnostic,
-                },
-            )
 
-        if (
-            not MODEL3_DISCUSSION_FILE.exists()
-            or MODEL3_DISCUSSION_FILE.stat().st_mtime < started_epoch
-        ):
-            message = "Model 3 未產生本次討論結果；未使用舊討論結果。"
-            write_model3_status(
-                "failed",
-                profile=profile_data,
-                message=message,
-            )
-            raise HTTPException(status_code=500, detail=message)
-
-        write_model3_status(
-            "completed",
-            profile=profile_data,
-            completed_at=datetime.now().isoformat(timespec="seconds"),
-            message="Model 3 AI 討論已完成。",
-        )
-
-    try:
+@app.post("/api/investment/discussion")
+def run_investment_discussion(force: bool = False) -> dict:
+    """Start or reuse a background discussion and return immediately."""
+    with pipeline_lock:
+        if not PROFILE_FILE.exists():
+            raise HTTPException(status_code=400, detail="請先完成配置。")
+        profile_data = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+        build_result(profile_data)  # Reject invalidated/failed configurations before queuing.
+        queue_discussion(profile_data, force=force)
         return build_result(profile_data)
-    except (FileNotFoundError, json.JSONDecodeError, pd.errors.ParserError) as exc:
-        write_model3_status(
-            "failed",
-            profile=profile_data,
-            message=f"Model 3 結果無法載入：{exc}；未使用舊討論結果。",
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Model 3 完成但結果無法載入：{exc}",
-        ) from exc
+
+# Persistent, device-scoped CSV alerts run separately from model calculations.
+from .price_alerts import install_alerts
+alert_store = install_alerts(app, INTERFACE_CHART_FILE, BACKEND_DIR / 'data' / 'price_alerts.sqlite3')

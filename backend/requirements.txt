@@ -10,3 +10,6 @@ python-dotenv
 ollama
 fastapi
 uvicorn[standard]
+yfinance
+
+pywebpush==2.5.0

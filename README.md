@@ -1,898 +1,262 @@
-﻿# RegimeInvest-tku
+# RegimeInvest｜市場狀態感知的投資配置 App
 
-這是一套結合「市場狀態預測、使用者選股、股票篩選、資金配置與 Multi-Agent 決策討論」的投資決策研究系統。
+RegimeInvest 是一款以台股為對象的投資決策研究 App，結合**市場狀態預測、個人化資金配置與多 Agent 討論**，讓使用者不只看到配置比例，也能查看報酬與風險兩種觀點，以及 Judge 的最終建議。
 
-本專案主要分成三個 Model：
+本專案採用 React Native／Expo 建立手機介面，透過 FastAPI 串接 Python 模型，並以 Ollama 在電腦端執行語言模型。手機是操作與展示介面，不負責執行大型模型。
 
-1. **Model 1：HMM + MTA + LSTM 市場狀態預測**
-2. **Model 2：使用者選股範圍限制 + 股票篩選 + Zipf + Genetic Algorithm (GA) 資金配置**
-3. **Model 3：Multi-Agent 投資決策討論與風險審查**
+## App 可以做什麼？
 
-最後由 `run_all_models_app_FINAL_UPDATED_FIX.py` 串接三個 Model，提供 App 使用。
+### 個人化設定與股票群組
 
----
+- 輸入投資預算、投資人身分、風險偏好及配置偏好。
+- 支援是否允許零股的配置設定。
+- 首次進入投資組合分析頁時，依登入身分顯示預設群組。
+- 透過左上角 More 按鈕切換小股民、中間戶、大戶或自訂群組。
 
-# 一、系統架構
+### Analyze｜投資組合分析
 
-整體流程：
+呈現模型計算的股票／現金配置、個股配置資訊與候選排名。群組或投資條件改變後，系統依新的範圍重新計算。
 
-```text
-前端使用者設定 / 選擇股票
-        |
-        v
-user_profile.json
-        |
-        v
-Model 1：市場狀態預測
-        |
-        v
-Model 2-A：投資人類型股票池 + 前端選股限制 + 候選股票篩選
-        |
-        v
-Model 2-B：Zipf + GA 資金配置
-        |
-        v
-Model 3：Multi-Agent 投資討論 / Judge Advisory
-        |
-        v
-End-to-End Audit
-        |
-        v
-    App 顯示結果
-```
+配置完成後即可查看結果，不必等待 AI 討論結束。
 
-App 正式執行入口：
+### Compare｜個股對比
 
-```powershell
-python run_all_models_app_FINAL_UPDATED_FIX.py
-```
+選擇兩檔股票，比較行情、候選排名、組合占比與分配金額。配置更新後，已開啟的對比結果會重新計算配置欄位；排名與 Analyze 共用選股分數排序。
 
----
+### Agent｜投資會議
 
-# 二、Model 1：市場狀態預測
+- 查看第 1 輪、第 2 輪討論。
+- 在 chat 區塊閱讀對話，展開 chat history 查看更多內容。
+- 查看風險追求與風險趨避 Agent 的個股調整建議。
+- 最終裁決顯示 Judge 建議的股票／現金比例、逐股調整與理由。
 
-正式程式：
+介面中的「提升／降低 X% 的預算」指相對於**總投資預算**的配置調整，不是股價漲跌幅，也不是預期報酬率。
+
+### 設定與提醒
+
+提供個人資料、投資相關選項與股票提醒條件管理。通知是否可用，取決於裝置權限、執行環境及推播設定。
+
+## 系統流程
 
 ```text
-model_1_v5_production_app_duration.py
+手機 App：輸入條件／選擇股票群組
+                   │
+                   ▼
+             FastAPI 後端
+                   │
+                   ▼
+       Model 1：市場狀態預測
+                   │
+                   ▼
+       Model 2：候選選股＋資金配置
+                   │
+          ┌────────┴─────────┐
+          ▼                  ▼
+  App 顯示配置結果    Model 3 背景投資討論
+                             │
+                    兩輪 Agent → Judge
+                             │
+                       驗證與保存結果
+                             │
+                       App 讀取並顯示
 ```
 
-研究方法：
+使用者提交不同設定重新計算時，後端會取消舊討論；新配置成功後啟動新的討論。舊任務的結果不能覆蓋新配置。
+
+目前配置與模型輸出使用共用檔案，主要設計為**單一使用者／單一展示工作階段**，不是已完成帳號隔離的多使用者交易平台。
+
+## 三個模型的分工
+
+| 模型 | 方法 | 提供的資訊 |
+| --- | --- | --- |
+| Model 1 | HMM、MTA、LSTM | 多頭／空頭／盤整狀態、狀態機率、預估持續時間及轉向空頭的平均吸收時間 |
+| Model 2 | 候選篩選、Zipf、Genetic Algorithm | 選股分數、配置權重、分配金額、股數與現金餘額 |
+| Model 3 | 本機 LLM 多 Agent 討論 | 報酬／風險觀點、證據引用、主張回應與 Judge 建議 |
+
+### Model 2：股票池與投資身分分開
+
+以使用者指定的 `stock_pool` 選擇股票池；沒有指定時，才以 `investor_type` 作為預設。自選模式再套用 `selected_stock_ids` 範圍。
+
+支援小戶、中間戶、大戶與合併股票池。單股配置上限為 30%；自選至少需要 3 檔股票，但仍須通過資料及可行性檢查，不代表任意三檔、任意預算都能成功配置。
+
+### Model 3：固定兩輪，再由 Judge 裁決
+
+| 角色 | Ollama 模型 | 關注重點 |
+| --- | --- | --- |
+| Risk-Seeking | `qwen3:8b` | 報酬機會、選股評分與成長機會 |
+| Risk-Averse | `mistral:latest` | 波動風險、集中度與資本保護 |
+| Judge | `llama3.2:3b` | 比較雙方提案並提出最終建議 |
+
+Agent 收到的是 Model 2 的結果摘要、Model 1 市場資訊、使用者條件、新聞證據及討論規則，並非整份 Model 2 程式或訓練資料。
+
+新聞由 Yahoo 台灣個股新聞頁取得，篩選最近 7 天且符合公司名稱的內容。外部來源可能缺漏或變更，系統會記錄取得狀態。
+
+**Model 3 的建議不會覆寫 Model 2 原始配置。** 輸出需經結構、數值、證據與相關一致性檢查；仍可能因逾時或回答無效而失敗。稽核通過不代表市場預測正確或自然語言理由一定完整。
+
+## 背景討論與快取
+
+- Model 1／2 配置與 Model 3 討論分開執行。
+- 前端定期讀取狀態；目前不是逐字串流聊天室。
+- 成功且通過快取資格檢查的完整討論可保存重用。
+- 判定包含使用者設定、模型輸入、新聞、程式版本、模型版本與執行參數等條件。
+- 即使前端輸入相同，新聞或模型程式更新也可能使快取失效。
+- 失敗或不符合資格的結果不會作為有效快取重用。
+
+本機真實測試中的完整討論曾耗時約 5–9 分鐘。這只是特定環境的測試紀錄，不是效能保證；硬體、輸入長度、模型載入與重試都會影響時間。
+
+## 開發工具與執行環境
+
+| 層級 | 技術 |
+| --- | --- |
+| 手機介面 | React Native、Expo、React Navigation |
+| 圖形與本機狀態 | React Native SVG、Skia、AsyncStorage |
+| 後端 API | Python、FastAPI、Uvicorn |
+| 數值與預測 | NumPy、pandas、SciPy、scikit-learn、hmmlearn、TensorFlow |
+| 本機語言模型 | Ollama |
+| 資料與新聞 | TEJ／本機 CSV、Yahoo 台灣新聞 |
+| 提醒服務 | SQLite、Expo 通知及選用的 Web Push |
+
+目前主要以 macOS 電腦搭配 iPhone Expo Go 開發與驗證。Android／其他電腦平台仍需各自驗證，不代表已完成全平台測試。
+
+## 專案結構
 
 ```text
-HMM + MTA + LSTM
+RegimeInvest-tku/
+├── frontend/
+│   ├── App.js
+│   └── src/
+│       ├── app/                   # Analyze、Compare、Home、Setting、會議頁
+│       ├── components/
+│       ├── context/
+│       ├── hooks/
+│       ├── services/
+│       └── data/
+├── backend/
+│   ├── app/                       # API、配置快取與提醒服務
+│   ├── regime_invest/             # 正式模型、輸入資料與模型輸出
+│   ├── data/                      # 本機快取、進度與資料庫
+│   └── tests/                     # 測試程式與本機測試結果
+└── start_dev.sh                    # macOS 區網開發啟動腳本
 ```
 
-Model 1 的工作是判斷目前市場屬於：
+目前正式模型位於 `backend/regime_invest/`：
 
-* Bull（多頭）
-* Bear（空頭）
-* Sideways（盤整）
+- `model_1_v5_production_app_duration.py`，及其引用的研究模組。
+- `model_2_candidate_selection_production_UPDATED.py`
+- `model_2_v2_strong_production_app_profile_UPDATED.py`
+- `model_2_zipf_ga_formal.py`
+- `model_3_final_polished.py`
+- `discussion_cache.py`
+- `run_all_models_app_FINAL_UPDATED_FIX.py`
 
-除了市場狀態之外，也會提供：
+App 應透過 FastAPI 使用背景討論流程；直接執行模型管線腳本屬於另一種執行方式，不能取代 App 狀態管理。
 
-* Bear / Bull / Sideways 各狀態機率
-* Expected Regime Duration（預期狀態持續時間）
-* MTA to Bear（距離 Bear 狀態的平均吸收時間）
+## 本機啟動：Expo Go
 
-正式設定：
+### 1. 準備環境與安裝依賴
 
-* Training Window：60 個月
-* Validation Window：12 個月
-* Sequence Length：3
-* Class Weight：OFF
-* HMM 使用 causal forward filtering，避免使用未來資訊
+需先安裝 Git、Python、Node.js／npm、Ollama，手機安裝與專案 SDK 相容的 Expo Go。Python 依賴包含 TensorFlow，請使用其支援的平台與版本；開發環境曾使用 Python 3.12。
 
-Model 1 的主要輸出：
-
-```text
-model_1_prediction_output.csv
+```bash
+git clone https://github.com/peis33/RegimeInvest-tku.git
+cd RegimeInvest-tku
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r backend/requirements.txt
+cd frontend
+npm ci
+cd ..
 ```
 
-此輸出會交給 Model 2 與 Model 3 使用。
+版本依 `frontend/package.json` 與鎖定檔為準。安裝成功不代表資料已備妥。
 
----
+目前 `frontend/app.json` 的圖示設定指向尚未提供的 `frontend/assets/`；需補入對應圖示，或調整圖示設定後再驗證 Expo 啟動與打包。
 
-# 三、Model 2：選股與資金配置
+### 2. 準備模型資料
 
-Model 2 分成兩個階段。
+請依資料使用授權，將正式輸入放在 `backend/regime_invest/`。主要包括：
 
-## Model 2-A：使用者範圍限制與候選股票篩選
+- 加權指數歷史資料與 `加權指數2026.csv`；歷史路徑可由 `HISTORY_CSV_PATH` 設定。
+- `小戶10.csv`、`中間戶10.csv`、`大戶10.csv`。
+- `model_2_investor_profile_historical.csv`（管線前置檢查需要）。
+- `stock_detail_historical.csv`、`介面圖表全部資料.csv`。
 
-正式程式：
+欄位與編碼以各讀取程式為準；股票池支援程式指定的 CP950／UTF-8 編碼。資料集不保證全部隨倉庫提供，缺少資料時不能直接完成模型流程。
 
-```text
-model_2_candidate_selection_production_UPDATED.py
+如使用 TEJ API 補資料，請在本機環境設定 `TEJ_API_KEY`，不要將真實金鑰放進版本控制。
+
+### 3. 準備本機語言模型
+
+```bash
+ollama pull qwen3:8b
+ollama pull mistral:latest
+ollama pull llama3.2:3b
+ollama list
 ```
 
-Model 2-A 會先依照使用者的投資人類型決定可使用的股票池：
+啟動 Ollama 應用程式或服務，預設本機位址為 `http://localhost:11434`。模型需要自行下載，不包含在本倉庫中。
 
-```text
-small  → 小戶10.csv
-normal → 中間戶10.csv
-large  → 大戶10.csv
+### 4. 啟動 App
+
+手機與電腦連上同一個 Wi-Fi，在專案根目錄執行：
+
+```bash
+bash start_dev.sh
 ```
 
-再與前端使用者選擇的股票取交集。
+腳本會啟動後端 `8000` 與 Expo `8081`，設定手機可用的區網 API 位址。使用 Expo Go 掃描 QR Code。
 
-因此目前正式流程為：
+若 macOS 自動偵測的網卡不適用，可指定電腦實際區網 IP：
 
-```text
-Investor-Type Eligibility Pool
-        ↓
-Frontend Selected Stocks
-        ↓
-Allowed Stock Universe
-        ↓
-Candidate Evaluation
-        ↓
-Model 2 Candidate Set
+```bash
+REACT_NATIVE_PACKAGER_HOSTNAME=192.168.1.100 bash start_dev.sh
 ```
 
-也就是：
+請將範例 IP 換成自己的電腦位址。手機不能用 `localhost:8000` 連到電腦後端。防火牆及 Wi-Fi 用戶端隔離也可能阻擋連線。
 
-**前端選擇股票 → 後端只從使用者選擇、且符合該投資人類型的股票中進行評估與資金配置。**
+只檢查後端服務時，可在電腦上呼叫：
 
-例如使用者選擇 `large`，後端只會考慮大戶股票池中符合前端選擇範圍的股票，不會自行加入前端沒有選擇的股票。
-
-候選股票主要根據：
-
-* 報酬表現
-* 流動性
-* 成交資訊
-* 波動風險
-* 市場狀態資訊
-
-進行評估與篩選。
-
-主要輸出：
-
-```text
-model_2_candidate_stocks.csv
+```bash
+curl http://127.0.0.1:8000/health
 ```
 
-同時產生候選股票選擇 Audit：
-
-```text
-experiment_model_2_candidate_selection_audit.csv
-experiment_model_2_candidate_selection_summary.csv
-```
-
-Audit 會檢查候選股票是否超出：
-
-* Investor-Type 股票池
-* Frontend Selected Stock Scope
-
-以避免後端使用使用者未選擇或不符合投資人類型的股票。
-
----
-
-## Model 2-B：Zipf + GA 資金配置
-
-正式程式：
-
-```text
-model_2_v2_strong_production_app_profile_UPDATED.py
-```
-
-核心最佳化程式：
-
-```text
-model_2_zipf_ga_formal.py
-```
-
-流程：
-
-```text
-Model 2 Candidate Set
-        ↓
-Zipf 初始配置
-        ↓
-Genetic Algorithm (GA)
-        ↓
-Constraint Validation
-        ↓
-個人化投資組合
-```
-
-Model 2 會讀取：
-
-```text
-user_profile.json
-```
-
-因此 App 可以依照使用者的：
-
-* 投資人類型
-* 風險偏好
-* 投資預算
-* 是否允許零股
-* 前端選擇的股票範圍
-
-產生個人化配置。
-
-Frozen 正式參數：
-
-* risk_add = 0.45
-* concentration_penalty = 0.12
-* HHI penalty = 0.05
-* 單一股票最大權重 = 30%
-* GA Population = 80
-* GA Generations = 120
-
-主要輸出：
-
-```text
-portfolio_allocation_output.csv
-```
-
-正式 Audit：
-
-```text
-model_2_v2_strong_final_portfolio_audit.csv
-```
-
-Model 2 的數值配置為正式 Quantitative Portfolio Allocation。
-
----
-
-# 四、Model 3：Multi-Agent 投資決策
-
-正式程式：
-
-```text
-model_3_final_polished.py
-```
-
-Model 3 使用三個不同角色的 Local LLM Agent。
-
-## Risk-Seeking Agent
-
-模型：
-
-```text
-Qwen3 8B
-```
-
-角色：
-
-* 偏向報酬機會
-* 尋找具有成長或報酬優勢的資產
-* 提出較積極的投資觀點
-* 根據 Evidence 提出各資產的調整方向
-
-## Risk-Averse Agent
-
-模型：
-
-```text
-Mistral
-```
-
-角色：
-
-* 偏向風險控制
-* 關注波動、集中度與現金部位
-* 對 Risk-Seeking Agent 的建議提出風險質疑
-* 可接受或反駁對方提出的 Claim
-
-## Judge Agent
-
-模型：
-
-```text
-Llama 3.2 3B
-```
-
-角色：
-
-* 閱讀 Risk-Seeking 與 Risk-Averse 的完整討論
-* 比較雙方使用的 Evidence
-* 整合最後的投資方向與理由
-* 產生 Advisory Allocation
-
----
-
-# 五、Model 2 與 Model 3 的責任分離
-
-這是本專案很重要的設計。
-
-Model 2 的 Zipf + GA 負責：
-
-```text
-數值最佳化
-正式資產權重
-投資限制
-資金配置
-```
-
-Model 3 的 Multi-Agent 負責：
-
-```text
-投資立場
-風險審查
-Evidence-based Debate
-投資方向
-Judge Advisory
-最終解釋
-```
-
-因此：
-
-```text
-Model 2 = Quantitative Optimization Layer
-Model 3 = Decision Support / Risk Review / Explainability Layer
-```
-
-**Model 2 原始數值配置在 Model 3 中保持不變。**
-
-Model 3 可以提出 Advisory Allocation，但不會覆寫：
-
-```text
-portfolio_allocation_output.csv
-```
-
-也就是說：
-
-* Model 2 Allocation = 正式數值最佳化結果
-* Model 3 Advisory Allocation = Multi-Agent 討論後的決策支援結果
-
-所有市場狀態、股票數值、報酬、風險、權重等事實統一由 Python Evidence Engine 提供。
-
-LLM Agent 主要負責根據 Evidence 進行立場分析、討論與決策支援，降低 LLM 自行產生金融事實的風險。
-
-此外，Judge 提出的數值建議最後仍會經過 Python Constraint Layer 檢查，以確保最終 Advisory Allocation 合法。
-
----
-
-# 六、Multi-Agent 討論流程
-
-Model 3 採用 **2–5 輪動態討論機制**。
-
-基本流程：
-
-```text
-Risk-Seeking Round 1
-        ↓
-Risk-Averse Round 1
-        ↓
-Risk-Seeking Round 2
-        ↓
-Risk-Averse Round 2
-        ↓
-檢查數值提案是否收斂
-        ↓
-若尚未收斂 → 繼續下一輪
-        ↓
-最多 Round 5
-        ↓
-Judge
-        ↓
-Python Numeric Constraint Check
-        ↓
-Final Advisory Decision
-```
-
-Agent 每輪可以：
-
-* 提出投資立場
-* 引用 Evidence
-* 建立 Claim
-* 接受對方 Claim
-* 反駁對方 Claim
-* 調整股票建議
-* 調整現金配置方向
-
-討論至少進行 2 輪，最多進行 5 輪。
-
-如果雙方的數值提案已經穩定並達到收斂條件，可以提前停止討論。
-
-因此 Agent **不需要被強迫產生不同答案**；如果雙方根據 Evidence 最後得到相同或接近的配置建議，系統可以視為數值共識。
-
-Judge 最後再整合雙方提案。
-
-App 可以顯示完整討論內容，而不只是最後一句建議。
-
----
-
-# 七、使用者設定 user_profile.json
-
-`user_profile.json` 是 App 與模型 Pipeline 之間的使用者設定介面。
-
-例如：
+啟動腳本綁定區網位址僅供開發展示，不應直接暴露到公網；健康檢查成功也不代表所有資料與模型都已可執行。
+
+## API 概覽
+
+| 方法 | 路徑 | 用途 |
+| --- | --- | --- |
+| GET | `/health` | 服務健康檢查 |
+| POST | `/api/investment/run` | 計算配置，成功後排入背景討論 |
+| GET | `/api/investment/latest` | 取得目前配置與討論狀態 |
+| POST | `/api/investment/discussion` | 啟動／重用目前配置的討論 |
+| GET | `/api/stocks/{stock_id}/detail` | 個股資料 |
+| GET | `/api/stocks/{stock_id}/charts` | 個股圖表資料 |
+
+自選配置的請求範例（股票仍須存在於對應資料池）：
 
 ```json
 {
-    "investor_type": "large",
-    "risk_preference": "neutral",
-    "budget": 50000,
-    "allow_fractional": true,
-    "selection_mode": "custom",
-    "selected_stocks": ["2330", "2454", "3008", "3034", "2379"]
+  "budget": 50000,
+  "investor_type": "normal",
+  "risk_preference": "neutral",
+  "allocation_preference": "moderate",
+  "allow_fractional": true,
+  "stock_pool": "normal",
+  "selection_mode": "custom",
+  "selected_stock_ids": ["2303", "2382", "2412", "2603"]
 }
 ```
 
-其中：
-
-* `investor_type`：投資人類型
-* `risk_preference`：風險偏好
-* `budget`：投資預算
-* `allow_fractional`：是否允許零股
-* `selection_mode`：股票選擇模式
-* `selected_stocks`：前端使用者選擇的股票
-
-App 修改使用者設定後，再執行：
-
-```powershell
-python run_all_models_app_FINAL_UPDATED_FIX.py
-```
-
-即可重新產生符合使用者股票範圍與投資屬性的個人化結果。
-
----
-
-# 八、安裝 Python 套件
-
-建議使用：
-
-```text
-Python 3.10+
-```
-
-安裝：
-
-```powershell
-pip install -r requirements.txt
-```
-
-主要套件包含：
-
-* NumPy
-* pandas
-* SciPy
-* scikit-learn
-* hmmlearn
-* TensorFlow
-* TEJ API
-* requests
-
----
-
-# 九、TEJ API 設定
-
-⚠️ **禁止把真正的 TEJ API Key 寫進 GitHub。**
-
-正式程式透過環境變數：
-
-```text
-TEJ_API_KEY
-```
-
-取得 API Key。
-
-Windows PowerShell：
-
-```powershell
-$env:TEJ_API_KEY="你的_TEJ_API_KEY"
-```
-
-Repository 中只提供：
-
-```text
-.env.example
-```
-
-真正的：
-
-```text
-.env
-```
-
-應由 `.gitignore` 排除。
-
----
-
-# 十、Ollama / Local LLM 設定
-
-Model 3 需要先安裝 Ollama。
-
-需要的模型：
-
-```powershell
-ollama pull qwen3:8b
-ollama pull mistral
-ollama pull llama3.2:3b
-```
-
-確認 Ollama 正常執行後，才能執行完整 Model 3。
-
-注意：
-
-**Ollama 模型本身不會上傳到 GitHub。**
-
-每台電腦需要自行下載模型。
-
----
-
-# 十一、正式執行方式
-
-如果要跑完整 App Pipeline：
-
-```powershell
-python run_all_models_app_FINAL_UPDATED_FIX.py
-```
-
-執行順序：
-
-```text
-Model 1
-    ↓
-Model 2 Candidate Selection UPDATED
-    ↓
-Model 2 V2 Strong Allocation UPDATED
-    ↓
-Model 3 Final-Polished Multi-Agent
-    ↓
-End-to-End Audit
-```
-
-正常完成時，最後應看到：
-
-```text
-FINAL RESULT: END-TO-END APP PIPELINE PASS
-```
-
-End-to-End 主要輸出：
-
-```text
-end_to_end_app_pipeline_audit.csv
-end_to_end_app_pipeline_report.txt
-```
-
----
-
-# 十二、哪些程式是目前正式版本？
-
-目前正式 Pipeline 使用以下檔案。
-
-### Model 1
-
-```text
-model_1_v5_production_app_duration.py
-```
-
-### Model 2
-
-```text
-model_2_candidate_selection_production_UPDATED.py
-model_2_v2_strong_production_app_profile_UPDATED.py
-model_2_zipf_ga_formal.py
-```
-
-### Model 3
-
-```text
-model_3_final_polished.py
-```
-
-### End-to-End
-
-```text
-run_all_models_app_FINAL_UPDATED_FIX.py
-```
-
-其他 V1、V2、V3、V4、V5、ablation、diagnostic、audit 等檔案主要為研究與實驗過程使用。
-
-**正式 App 串接應以上述目前版本為準，不要使用舊版程式取代。**
-
----
-
-# 十三、研究實驗程式
-
-Repository 中保留多個研究驗證程式，包括：
-
-* Sliding Window
-* Strict Rolling
-* Ablation Study
-* Robustness Test
-* Repeated Stability Test
-* Regime Sensitivity
-* Model 2 Constraint / Benchmark Audit
-* Model 3 Multi-Agent / Grounding / Stability Audit
-
-這些程式主要用於研究驗證，不是 App 正式執行入口。
-
----
-
-# 十四、GitHub 安全注意事項
-
-禁止上傳：
-
-* Password / Credential
-* 真實 API Key
-* `.env`
-* `__pycache__`
-* `.pyc`
-* 個人 Token
-
-正式 API Key 應透過環境變數管理。
-
----
-
-# 十五、快速了解版本
-
-如果只是要執行專案，不需要研究所有舊程式。
-
-### 第一次使用
-
-1. 安裝 Python 套件：
-
-   ```powershell
-   pip install -r requirements.txt
-   ```
-
-2. 設定 TEJ API Key。
-
-3. 安裝 Ollama。
-
-4. 下載：
-
-   ```powershell
-   ollama pull qwen3:8b
-   ollama pull mistral
-   ollama pull llama3.2:3b
-   ```
-
-5. 設定 `user_profile.json`。
-
-6. 執行：
-
-   ```powershell
-   python run_all_models_app_FINAL_UPDATED_FIX.py
-   ```
-
-### 如果只是做 App 串接
-
-主要看：
-
-```text
-user_profile.json
-run_all_models_app_FINAL_UPDATED_FIX.py
-```
-
-以及各 Model 產生的 Output CSV / JSON。
-
----
-
-# App 串接說明
-
-## 1. 執行完整模型
-
-App 後端執行：
-
-```powershell
-python run_all_models_app_FINAL_UPDATED_FIX.py
-```
-
-完整流程：
-
-```text
-Frontend Selected Stocks
-→ user_profile.json
-→ Model 1
-→ Investor-Type Eligibility Filter
-→ Model 2 Candidate Selection
-→ Model 2 Portfolio Allocation
-→ Model 3 Multi-Agent Advisory
-→ End-to-End Audit
-```
-
-請勿修改 Model 1、Model 2、Model 3 已確認的正式演算法內容。
-
----
-
-## 2. App 輸入
-
-使用者設定檔：
-
-```text
-user_profile.json
-```
-
-主要欄位：
-
-* `investor_type`
-* `risk_preference`
-* `budget`
-* `allow_fractional`
-* `selection_mode`
-* `selected_stocks`
-
-目前股票選擇流程：
-
-```text
-前端選股
-    ↓
-寫入 selected_stocks
-    ↓
-依 investor_type 取得 Eligible Pool
-    ↓
-兩者取交集
-    ↓
-Model 2 只使用合法股票範圍
-```
-
-因此後端不會自行使用前端未選擇的股票。
-
----
-
-## 3. App 需要讀取的輸出
-
-### Model 1：市場狀態
-
-檔案：
-
-```text
-model_1_prediction_output.csv
-```
-
-App 主要使用：
-
-* `predicted_regime`
-* `prob_Bear`
-* `prob_Bull`
-* `prob_Sideways`
-* `expected_regime_duration_steps`
-* `mta_to_bear_steps`
-
-用途：
-
-顯示目前預測市場狀態、各狀態機率、預估狀態持續時間，以及 MTA to Bear。
-
----
-
-### Model 2：投資組合
-
-檔案：
-
-```text
-portfolio_allocation_output.csv
-```
-
-App 主要使用：
-
-* `stock_id`
-* `name`
-* `asset_type`
-* `price`
-* `final_weight`
-* `final_weight_percent`
-* `allocated_amount`
-* `shares`
-* `expected_return`
-* `risk`
-
-用途：
-
-顯示正式股票配置、現金配置、投資金額與權重。
-
-Model 2 / Zipf + GA 的數值配置為正式 Quantitative Portfolio Allocation。
-
----
-
-### Model 3：Multi-Agent 討論
-
-主要檔案：
-
-```text
-model_3_final_discussion_output.json
-```
-
-其他輸出：
-
-```text
-model_3_final_output.csv
-model_3_advisory_allocation.csv
-model_3_final_production_report.txt
-model_3_final_production_audit.csv
-```
-
-App 可呈現：
-
-* Risk-Seeking / Risk-Averse 各輪討論
-* Agent 立場
-* 各資產提高 / 降低 / 維持
-* Evidence
-* Claim
-* 接受 / 反駁對方 Claim
-* Debate Round Count
-* Consensus Status
-* Stop Reason
-* Judge 最終判斷
-* Judge Advisory Allocation
-
-Model 3 是：
-
-```text
-Decision Support / Risk Review / Explainability Layer
-```
-
-Model 3 不覆寫 Model 2 的：
-
-```text
-portfolio_allocation_output.csv
-```
-
-正式 Quantitative Allocation 與 Multi-Agent Advisory 可以在 App 中分開呈現。
-
----
-
-## 4. App 串接流程
-
-```text
-使用者輸入
-    ↓
-user_profile.json
-    ↓
-python run_all_models_app_FINAL_UPDATED_FIX.py
-    ↓
-Model 1
-    ↓
-Model 2 Candidate Selection
-    ↓
-Model 2 Portfolio Allocation
-    ↓
-Model 3 Multi-Agent Advisory
-    ↓
-End-to-End Audit
-    ↓
-App 讀取結果
-```
-
-主要結果：
-
-```text
-1. model_1_prediction_output.csv
-2. portfolio_allocation_output.csv
-3. model_3_final_discussion_output.json
-4. model_3_advisory_allocation.csv
-5. end_to_end_app_pipeline_audit.csv
-```
-
----
-
-## 5. 模型端目前狀態
-
-目前完整 Pipeline 已成功執行：
-
-```text
-Model 1                                  PASS
-Model 2 Candidate Selection UPDATED     PASS
-Model 2 V2 Strong Allocation UPDATED    PASS
-Model 3 Final-Polished Multi-Agent      PASS
-End-to-End Pipeline                     PASS
-```
-
-目前流程已支援：
-
-```text
-Frontend Selected Universe
-        ↓
-Investor-Type Eligibility Filter
-        ↓
-Candidate Selection
-        ↓
-Model 2 Quantitative Allocation
-        ↓
-Model 3 Multi-Agent Advisory
-```
-
-因此使用者從前端選擇股票後，後端只會在符合該使用者投資人類型與選股範圍的股票中進行後續評估與資金配置。
-
----
-
-# 注意
-
-本專案為學術研究與系統 Prototype。
-
-所有模型輸出僅供研究與系統展示使用，不構成任何實際投資建議。
+欄位名稱是 `selected_stock_ids`，不是 `selected_stocks`。配置更新中可能回傳 `configuration_busy`；尚無有效配置時可能回傳 `configuration_unavailable`。
+
+## 開發與安全注意事項
+
+- 不提交真實 `.env`、API Key、私鑰、推播 token 或訂閱資料。
+- 不提交本機資料庫、討論快取、測試結果、虛擬環境及 node_modules。
+- `.gitignore` 不會取消已追蹤檔案；若秘密曾提交，需處理追蹤／歷史與金鑰更換。
+- 前端直接讀取後端會議資料，不包含本機會議預覽紀錄。
+- 歷史行情與新聞並非交易所即時報價；畫面資料日期取決於本機資料及外部來源。
+- 新聞可能缺漏，模型也可能逾時、引用錯誤或產生不完整理由。系統會進行檢查，但不保證每場討論成功。
+- 尚未翻譯或不完整的裁決理由會在介面提示，不能把提示視為完整的投資分析。
+- 模型、前端與測試仍持續迭代，單次成功測試不代表所有使用情境皆已驗證。

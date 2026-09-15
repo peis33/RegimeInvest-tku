@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import {
+  Keyboard,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
+  TouchableWithoutFeedback,
   View,
 } from 'react-native';
 import AssetSvg from '../components/AssetSvg';
@@ -361,6 +363,13 @@ export default function Login({ onEnter }) {
   };
 
   return (
+    <TouchableWithoutFeedback
+      onPress={() => {
+        Keyboard.dismiss();
+        setOpenMenu(null);
+      }}
+      accessible={false}
+    >
     <View style={[styles.container, { width: screenWidth }]}>
       <GridBackdrop screenWidth={screenWidth} screenHeight={screenHeight} />
       {!allowFractional ? (
@@ -751,6 +760,7 @@ export default function Login({ onEnter }) {
         ) : null}
       </View>
     </View>
+    </TouchableWithoutFeedback>
   );
 }
 
@@ -763,7 +773,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   gridBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     overflow: 'hidden',
     backgroundColor: LOGIN_BACKGROUND,
   },

@@ -1,19 +1,27 @@
 import React from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Path } from 'react-native-svg';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   View,
 } from 'react-native';
 import ChatHistory from './ChatHistory';
+import Text from '../components/MeetingText';
+import { meetingMessages, suggestionRows, shortNumber } from '../services/meetingSummary';
 import AssetSvg from '../components/AssetSvg';
 import { fetchLatestInvestment } from '../services/investmentApi';
+import { judgeAllocation } from '../services/judgeAllocation';
+import { reconcileInvestmentResult, stoppedInvestmentResult } from '../services/investmentState';
+import { startMeetingPolling } from '../services/meetingPoller';
 import { useAppSettings } from '../context/AppSettingsContext';
 import useViewportDimensions from '../hooks/useViewportDimensions';
+import { USE_MEETING_SNAPSHOT, meetingSnapshot } from '../data/meetingPreview';
 
-const AGENT_MEETING_IMAGE = require('../assets/image/AgentMeeting.svg');
+const AGENT_MEETING_IMAGE = require('../assets/image/AgentMeeting.mobile.png');
 const JUDGE_IMAGE = require('../assets/image/judge.svg');
 const RISK_SEEKING_IMAGE = require('../assets/image/risk-seeking.svg');
 const RISK_AVERSE_IMAGE = require('../assets/image/risk-averse.svg');
@@ -25,12 +33,6 @@ const CANCEL_IMAGE = require('../assets/image/cancel.svg');
 const SCALING_IMAGE = require('../assets/image/scaling.svg');
 
 const DESIGN_WIDTH = 572;
-
-const MEETING_TABS = [
-  { id: 'round1', label: '第一輪' },
-  { id: 'round2', label: '第二輪' },
-  { id: 'final', label: '最終裁決' },
-];
 
 const RISK_LABELS = {
   conservative: '保守風險',
@@ -150,6 +152,28 @@ function agentAllocation(data, role, round, fallback = null) {
     discussion?.agent_allocations?.[role]?.[`round${round}`],
   ];
 
+  // V5.2 exposes an exact per-asset advisory proposal. Convert it to the
+  // stock/cash summary used by the influence cards while leaving the Model 2
+  // portfolio summary untouched.
+  if (['individual_stock_suggestions', 'unapplied_asset_suggestions'].includes(decision?.proposal_scope)) return null;
+  const proposedWeights = decision?.proposed_weights;
+  if (proposedWeights && typeof proposedWeights === 'object') {
+    let stock = 0;
+    let cash = 0;
+    Object.entries(proposedWeights).forEach(([assetId, rawWeight]) => {
+      const weight = percentValue(rawWeight);
+      if (weight === null) return;
+      if (String(assetId).toUpperCase() === 'CASH') cash += weight;
+      else stock += weight;
+    });
+    if (stock !== 0 || cash !== 0) {
+      return {
+        stock: Math.max(0, Math.min(100, stock)),
+        cash: Math.max(0, Math.min(100, cash)),
+      };
+    }
+  }
+
   for (const candidate of candidates) {
     const allocation = extractAllocation(candidate, null);
     if (allocation) {
@@ -157,10 +181,23 @@ function agentAllocation(data, role, round, fallback = null) {
     }
   }
 
-  // Model 3 currently returns relative directions only.  Do not use Model 2's
-  // final allocation as an Agent's personal stance; only render an optional
-  // numeric allocation when the backend explicitly supplies one.
   return fallback;
+}
+
+function discussionRoundNumbers(data) {
+  const rounds = data?.discussion?.rounds;
+  if (Array.isArray(rounds)) {
+    const values = rounds
+      .map((item) => Number(item?.round))
+      .filter((value) => Number.isInteger(value) && value > 0);
+    if (values.length) return [...new Set(values)].sort((a, b) => a - b);
+  }
+  return [1, 2];
+}
+
+function latestDiscussionRound(data) {
+  const values = discussionRoundNumbers(data);
+  return values[values.length - 1] || 1;
 }
 
 function assetKey(value) {
@@ -286,6 +323,7 @@ function RoundChat({
   error,
   hasData,
   discussionPending,
+  discussionStatus,
   discussionError,
   onStartDiscussion,
   layoutScale,
@@ -296,12 +334,12 @@ function RoundChat({
     <View
       style={[
         styles.chatPanel,
-        { width, height: 546 * layoutScale },
+        { width, height: Math.max(440, 546 * layoutScale) },
       ]}
     >
       <View style={[styles.chatHeader, { height: 48 * layoutScale }]}>
         <Text style={[styles.chatTitle, { fontSize: 21 * layoutScale }]}>
-          Chat
+          chat
         </Text>
         <Pressable
           accessibilityRole="button"
@@ -361,7 +399,7 @@ function RoundChat({
             messages.map((message, index) => {
               const isRiskAverse = message.role === 'risk_averse';
               const isModerator = message.role === 'moderator';
-              const isRight = isRiskAverse;
+              const isRight = isRiskAverse || message.role === 'risk_seeking';
               const bubbleStyle = isModerator
                 ? styles.messageBubbleModerator
                 : isRiskAverse
@@ -399,10 +437,10 @@ function RoundChat({
                       styles.messageBubble,
                       bubbleStyle,
                       {
-                        width: '79%',
+                        width: '85%',
                         alignSelf: isRight ? 'flex-end' : 'flex-start',
-                        marginLeft: isRight ? 0 : 48 * layoutScale,
-                        marginRight: isRight ? 48 * layoutScale : 0,
+                        marginLeft: isRight ? 0 : 32 * layoutScale,
+                        marginRight: isRight ? 32 * layoutScale : 0,
                         paddingHorizontal: 14 * layoutScale,
                         paddingVertical: 12 * layoutScale,
                       },
@@ -426,8 +464,8 @@ function RoundChat({
                       style={[
                         styles.messageText,
                         {
-                          fontSize: 16 * layoutScale,
-                          lineHeight: 29 * layoutScale,
+                          fontSize: Math.max(14, 16 * layoutScale),
+                          lineHeight: Math.max(23, 29 * layoutScale),
                         },
                       ]}
                     >
@@ -467,8 +505,17 @@ function RoundChat({
                 ]}
               >
                 {discussionPending
-                  ? '正在執行 Model 3 AI 討論…'
-                  : '目前尚未執行 AI 討論。'}
+                  ? (() => {
+                    const p = discussionStatus?.progress;
+                    if (!p) return discussionStatus?.message || '正在準備背景 AI 討論…';
+                    const role = { risk_seeking: 'Qwen', risk_averse: 'Mistral', judge: 'Judge' }[p.role] || p.model || '模型';
+                    const stage = { preparing: '準備中', generating: '發言中', validating: '驗證中', call_failed: '呼叫失敗，檢查中' }[p.stage] || '處理中';
+                    const elapsed = discussionStatus?.started_at ? Math.max(0, Math.floor((Date.now() - new Date(discussionStatus.started_at).getTime()) / 1000)) : Math.floor(p.elapsed_seconds || 0);
+                    return `第 ${p.round}/${p.max_rounds} 輪｜${role} ${stage}${p.retry ? '（重試）' : ''}｜已耗時 ${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒`;
+                  })()
+                  : discussionError || discussionStatus?.status === 'failed'
+                    ? '本次 AI 討論未完成。'
+                    : '目前尚未執行 AI 討論。'}
               </Text>
               {!discussionPending ? (
                 <Pressable
@@ -530,54 +577,43 @@ function CandidateCard({ title, candidates, icon, accent, layoutScale, width }) 
           width,
           minHeight: 204 * layoutScale,
           borderColor: accent,
-          borderWidth: 2 * layoutScale,
-          borderRadius: 14 * layoutScale,
-          paddingHorizontal: 12 * layoutScale,
-          paddingVertical: 10 * layoutScale,
+          borderWidth: 2,
+          borderRadius: 38 * layoutScale,
+          paddingHorizontal: 14 * layoutScale,
+          paddingVertical: 20 * layoutScale,
         },
       ]}
     >
       <View style={styles.candidateCardHeader}>
-        <AssetSvg
-          asset={icon}
-          width={59 * layoutScale}
-          height={69 * layoutScale}
-          accessibilityLabel={title}
-          pointerEvents="none"
-        />
+        <View style={{width:32, height:32, borderRadius:16, backgroundColor:'#545B60', alignItems:'center', justifyContent:'center'}}>
+          <Svg width={23} height={23} viewBox="0 0 24 24">
+            <Path d={title === '報酬觀點' ? 'M3 20 L8 10 L13 15 L21 3 M15 3 H21 V9' : 'M12 3 C9 5 6 6 3 6 V11 C3 16 7 20 12 22 C17 20 21 16 21 11 V6 C18 6 15 5 12 3 Z'} fill="none" stroke={accent} strokeWidth={2.5} strokeLinejoin="round" />
+          </Svg>
+        </View>
         <Text
           style={[
             styles.candidateCardTitle,
             {
               marginLeft: 6 * layoutScale,
-              fontSize: 13 * layoutScale,
-              lineHeight: 18 * layoutScale,
+              fontSize: Math.max(11, 13 * layoutScale),
+              lineHeight: Math.max(17, 18 * layoutScale),
             },
           ]}
         >
-          股票建議候選
+          <Text style={{color:'#929292',fontSize:Math.max(10,12*layoutScale)}}>{title === '報酬觀點' ? '風險追求' : '風險趨避'}</Text>{'\n'}股票增減建議
         </Text>
       </View>
       <View style={styles.candidateList}>
         {candidates.length > 0 ? (
           candidates.map((candidate) => (
-            <Text
-              key={candidate.id}
-              numberOfLines={1}
-              ellipsizeMode="tail"
-              style={[
-                styles.candidateItem,
-                {
-                  fontSize: 14 * layoutScale,
-                  lineHeight: 22 * layoutScale,
-                  marginTop: 2 * layoutScale,
-                },
-              ]}
-            >
-              {candidate.name
-                ? `${candidate.code} ${candidate.name}`
-                : candidate.code}
-            </Text>
+            <View key={candidate.id} style={{ paddingVertical: 10 * layoutScale }}>
+              <View style={{flexDirection:'row', alignItems:'center', justifyContent:'space-between', gap:4}}>
+                <Text style={{color:'#FFFFFF', flex:1, fontSize:Math.max(11,14 * layoutScale)}}><Text style={{fontWeight:'700'}}>{candidate.code}</Text> {candidate.name !== candidate.code ? candidate.name : ''}</Text>
+                <View style={{width:Math.max(68,92 * layoutScale), height:Math.max(28,36 * layoutScale), flexShrink:0, alignItems:'center', justifyContent:'center', backgroundColor:Math.abs(candidate.delta)<0.005?'#282A28':candidate.delta>0?'#3F3030':'#2E392D', borderRadius:20}}>
+                  <Text numberOfLines={1} accessibilityLabel={Math.abs(candidate.delta)<0.005 ? '維持原比例' : `${candidate.delta>0?'增加':'減少'} ${shortNumber(Math.abs(candidate.delta))} 個百分點`} style={{color:Math.abs(candidate.delta)<0.005?'#9D9D9D':candidate.delta>0?'#EF4949':'#39B54A', fontWeight:'700', fontSize:Math.max(11,14 * layoutScale), textAlign:'center'}}>{candidate.label}{Math.abs(candidate.delta)>=0.005 ? '%' : ''}</Text>
+                </View>
+              </View>
+            </View>
           ))
         ) : (
           <Text
@@ -610,7 +646,8 @@ function InfluenceRow({
       style={[
         styles.influenceRow,
         {
-          marginTop: (secondary ? 66 : 10) * layoutScale,
+          marginTop: (secondary ? 38 : 10) * layoutScale,
+          backgroundColor: '#2C2C2C',
           minHeight: 120 * layoutScale,
           padding: 9 * layoutScale,
           borderWidth: 2 * layoutScale,
@@ -641,7 +678,7 @@ function InfluenceRow({
             <Text
               style={[
                 styles.influenceMetricLabel,
-                { fontSize: 11 * layoutScale, lineHeight: 16 * layoutScale },
+                { fontSize: Math.max(12, 11 * layoutScale), lineHeight: Math.max(22, 24 * layoutScale) },
               ]}
             >
               {metric.label}
@@ -665,6 +702,7 @@ function InfluenceRow({
                       Math.min(100, metric.value || 0),
                     )}%`,
                     backgroundColor: accent,
+                    opacity: metric.label === '現金' ? 0.5 : 1,
                     borderRadius: 4 * layoutScale,
                   },
                 ]}
@@ -673,268 +711,68 @@ function InfluenceRow({
             <Text
               style={[
                 styles.influenceMetricValue,
-                { fontSize: 14 * layoutScale, lineHeight: 20 * layoutScale },
+                { fontSize: Math.max(14, 14 * layoutScale), lineHeight: Math.max(22, 24 * layoutScale) },
               ]}
             >
               {formatPercent(metric.value)}
             </Text>
           </View>
         ))}
+        {!allocation && <Text style={{ color: '#B8B8B8', fontSize: 12, marginTop: 6 }}>尚未整合股票／現金比例</Text>}
       </View>
     </View>
   );
 }
 
-function FinalDecisionPanel({ data, portfolioAllocation, layoutScale, width }) {
-  const seekingAllocation = agentAllocation(data, 'risk_seeking', 2);
-  const averseAllocation = agentAllocation(data, 'risk_averse', 2);
-  const allocationBoxWidth = width * 0.335;
-  const warningWidth = width - 22 * layoutScale;
-
+function FinalDecisionPanel({ data, layoutScale, width }) {
+  const judge = data?.discussion?.structured_decisions?.judge;
+  const allocation = judgeAllocation(judge);
+  const adjusted = judge?.judge_numeric_legalization?.applied;
+  const stockRows = allocation ? suggestionRows(data, judge, true).filter(row => String(row.code || row.id).toUpperCase() !== 'CASH') : [];
+  const cardScale = width / 584;
   return (
-    <View style={{ width }}>
-      <View
-        style={[
-          styles.warningBanner,
-          {
-            width: warningWidth,
-            height: 66 * layoutScale,
-            marginTop: 14 * layoutScale,
-            alignSelf: 'center',
-            paddingHorizontal: 12 * layoutScale,
-            borderRadius: 14 * layoutScale,
-          },
-        ]}
-      >
-        <AssetSvg
-          asset={NOTICE_IMAGE}
-          width={46 * layoutScale}
-          height={46 * layoutScale}
-          accessibilityLabel="Warning"
-          pointerEvents="none"
-        />
-        <Text
-          style={[
-            styles.warningText,
-            { fontSize: 12 * layoutScale, lineHeight: 18 * layoutScale },
-          ]}
-        >
-          此為 AI Agent 討論的參考結果，與個人風險偏好設定無關
-        </Text>
+    <View style={{ width, backgroundColor: '#3E4140', borderRadius: 12 * cardScale, marginTop: 20 * layoutScale, paddingBottom: 40 * cardScale }}>
+      <View style={[styles.finalHeading, { minHeight: 94 * cardScale, paddingHorizontal: 24 * cardScale, paddingVertical: 20 * cardScale, borderBottomWidth: 1, borderBottomColor: '#2E3331', gap: 10 * cardScale }]}>
+        <AssetSvg asset={JUDGE_IMAGE} width={50 * cardScale} height={50 * cardScale} accessibilityLabel="裁決" />
+        <Text style={[styles.finalHeadingTitle, { fontSize: 24 * cardScale }]}>judge裁決</Text>
+        <View style={[styles.riskPill, { borderWidth: 1, borderColor: '#637485', borderRadius: 10 * cardScale, paddingHorizontal: 10 * cardScale, paddingVertical: 6 * cardScale }]}>
+          <Text style={{ color: '#A8C9E5', fontSize: 16 * cardScale }}>{riskLabel(data)}</Text>
+        </View>
       </View>
-
-      <View
-        style={[
-          styles.finalPanel,
-          {
-            width,
-            alignSelf: 'center',
-            marginTop: 21 * layoutScale,
-            padding: 20 * layoutScale,
-            paddingBottom: 98 * layoutScale,
-            borderRadius: 10 * layoutScale,
-          },
-        ]}
-      >
-        <View style={styles.finalHeading}>
-          <View
-            style={[
-              styles.finalHeadingIcon,
-              {
-                width: 50 * layoutScale,
-                height: 50 * layoutScale,
-                borderRadius: 25 * layoutScale,
-              },
-            ]}
-          >
-            <AssetSvg
-              asset={JUDGE_IMAGE}
-              width={50 * layoutScale}
-              height={50 * layoutScale}
-              accessibilityLabel="Judge"
-              pointerEvents="none"
-              style={styles.judgeAsset}
-            />
-            <View
-              style={[
-                styles.judgeFallbackIcon,
-                { width: 50 * layoutScale, height: 50 * layoutScale },
-              ]}
-              pointerEvents="none"
-            >
-              <View
-                style={[
-                  styles.judgeGavelHead,
-                  {
-                    width: 23 * layoutScale,
-                    height: 6 * layoutScale,
-                    top: 16 * layoutScale,
-                    left: 13 * layoutScale,
-                    borderRadius: 3 * layoutScale,
-                  },
-                ]}
-              />
-              <View
-                style={[
-                  styles.judgeGavelHandle,
-                  {
-                    width: 5 * layoutScale,
-                    height: 20 * layoutScale,
-                    top: 22 * layoutScale,
-                    left: 25 * layoutScale,
-                    borderRadius: 2.5 * layoutScale,
-                  },
-                ]}
-              />
-              <View
-                style={[
-                  styles.judgeGavelBase,
-                  {
-                    width: 20 * layoutScale,
-                    height: 2 * layoutScale,
-                    left: 15 * layoutScale,
-                    bottom: 10 * layoutScale,
-                    borderRadius: layoutScale,
-                  },
-                ]}
-              />
-            </View>
-          </View>
-          <Text
-            style={[
-              styles.finalHeadingTitle,
-              { fontSize: 17 * layoutScale, lineHeight: 24 * layoutScale },
-            ]}
-          >
-            judge裁決
-          </Text>
-          <View
-            style={[
-              styles.riskPill,
-              {
-                paddingHorizontal: 13 * layoutScale,
-                paddingVertical: 7 * layoutScale,
-                borderRadius: 18 * layoutScale,
-              },
-            ]}
-          >
-            <Text
-              style={[
-                styles.riskPillText,
-                { fontSize: 13 * layoutScale, lineHeight: 18 * layoutScale },
-              ]}
-            >
-              {riskLabel(data)}
-            </Text>
-          </View>
+      <View style={{ paddingHorizontal: 34 * cardScale }}>
+        {adjusted && <Text style={{ color: '#F0CB8B', fontSize: 13, lineHeight: 21, marginTop: 12 }}>本次未產生有效裁決：原始建議超出限制。以下僅為舊版系統修正紀錄，不可視為有效建議；原配置保持不變。</Text>}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 38 * cardScale }}>
+          {['stock', 'cash'].map(key => <View key={key} style={{ width: '43%', borderWidth: 2, borderColor: '#246B9F', borderRadius: 22 * cardScale, minHeight: 132 * cardScale, paddingVertical: 22 * cardScale, paddingHorizontal: 32 * cardScale, justifyContent: 'center' }}>
+            <Text style={{ color: key === 'stock' ? '#008CFF' : '#CCCCCC', fontSize: 22 * cardScale }}>{key === 'stock' ? '股票' : '現金'}</Text>
+            <Text adjustsFontSizeToFit numberOfLines={1} style={{ color: key === 'stock' ? '#008CFF' : '#CCCCCC', fontSize: 56 * cardScale, lineHeight: 64 * cardScale, fontWeight: '700' }}>{allocation ? formatPercent(allocation[key]) : '—'}</Text>
+          </View>)}
         </View>
-
-        <View
-          style={[
-            styles.finalAllocationRow,
-            { marginTop: 25 * layoutScale },
-          ]}
-        >
-          <View
-            style={[
-              styles.finalAllocationBox,
-              {
-                width: allocationBoxWidth,
-                minHeight: 124 * layoutScale,
-                borderRadius: 14 * layoutScale,
-                padding: 12 * layoutScale,
-              },
-            ]}
-          >
-            <Text
-              style={[
-                styles.finalAllocationLabel,
-                { fontSize: 14 * layoutScale, lineHeight: 20 * layoutScale },
-              ]}
-            >
-              股票
-            </Text>
-            <Text
-              style={[
-                styles.finalStockPercent,
-                {
-                  marginTop: 6 * layoutScale,
-                  fontSize: 42 * layoutScale,
-                  lineHeight: 48 * layoutScale,
-                },
-              ]}
-            >
-              {formatPercent(portfolioAllocation?.stock)}
-            </Text>
-          </View>
-          <View
-            style={[
-              styles.finalAllocationBox,
-              {
-                width: allocationBoxWidth,
-                minHeight: 124 * layoutScale,
-                borderRadius: 14 * layoutScale,
-                padding: 12 * layoutScale,
-              },
-            ]}
-          >
-            <Text
-              style={[
-                styles.finalAllocationLabel,
-                { fontSize: 14 * layoutScale, lineHeight: 20 * layoutScale },
-              ]}
-            >
-              現金
-            </Text>
-            <Text
-              style={[
-                styles.finalCashPercent,
-                {
-                  marginTop: 6 * layoutScale,
-                  fontSize: 42 * layoutScale,
-                  lineHeight: 48 * layoutScale,
-                },
-              ]}
-            >
-              {formatPercent(portfolioAllocation?.cash)}
-            </Text>
-          </View>
+        <View style={{ marginTop: 62 * cardScale }}>
+          {stockRows.map(row => {
+            const valid = typeof row.delta === 'number' && Number.isFinite(row.delta);
+            const unchanged = valid && Math.abs(row.delta) < 0.005;
+            const color = !valid || unchanged ? '#CCCCCC' : row.delta > 0 ? '#EEA8A8' : '#A0EE81';
+            return <View key={row.id} style={{ flexDirection: 'row', alignItems: 'center', minHeight: 92 * cardScale, gap: 12 * cardScale }}>
+              <View style={{ width: 22 * cardScale, height: 22 * cardScale, borderRadius: 11 * cardScale, backgroundColor: !valid || unchanged ? '#777A77' : row.delta > 0 ? '#BD3034' : '#25882B' }} />
+              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: '#F4F4F4', flex: 1, fontSize: 32 * cardScale }}>
+                <Text style={{ fontWeight: '700' }}>{row.code}</Text> {row.name !== row.code ? row.name : ''}
+              </Text>
+              <View style={{ width: '43%', alignItems: 'center', borderWidth: valid && !unchanged ? 1 : 0, borderColor: row.delta > 0 ? '#683B3B' : '#486B40', borderRadius: 36 * cardScale, paddingHorizontal: 10 * cardScale, minHeight: 66 * cardScale, justifyContent: 'center', backgroundColor: !valid || unchanged ? 'transparent' : '#343735' }}>
+                <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} accessibilityLabel={!valid ? '尚無調整資料' : unchanged ? '維持原比例' : `${row.delta > 0 ? '提升' : '降低'} ${shortNumber(Math.abs(row.delta))}% 的總預算`} style={{ color, fontSize: unchanged ? 44 * cardScale : 18 * cardScale, textAlign: 'center' }}>
+                  {!valid ? '—' : unchanged ? '維持' : <>{row.delta > 0 ? '提升' : '降低'}<Text style={{ fontSize: 36 * cardScale, fontWeight: '700' }}>{shortNumber(Math.abs(row.delta))}%</Text>的預算</>}
+                </Text>
+              </View>
+            </View>;
+          })}
         </View>
-
-        <Text
-          style={[
-            styles.influenceSectionTitle,
-            {
-              marginTop: 26 * layoutScale,
-              fontSize: 14 * layoutScale,
-              lineHeight: 20 * layoutScale,
-            },
-          ]}
-        >
-          討論所受之影響力
-        </Text>
-        <InfluenceRow
-          title="風險追求"
-          allocation={seekingAllocation}
-          icon={RISK_SEEKING_IMAGE}
-          accent="#526BFF"
-          layoutScale={layoutScale}
-        />
-        <InfluenceRow
-          title="風險趨避"
-          allocation={averseAllocation}
-          icon={RISK_AVERSE_IMAGE}
-          accent="#E47700"
-          layoutScale={layoutScale}
-          secondary
-        />
-
+        {!allocation && <Text style={{ color: '#B8B8B8', fontSize: 12, lineHeight: 20 }}>尚無可顯示的有效 Judge 配置比例。</Text>}
       </View>
     </View>
   );
 }
 
 function MeetingProcess({ onBack, style }) {
+  const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const {
     investmentResult,
@@ -945,49 +783,30 @@ function MeetingProcess({ onBack, style }) {
   const [showChatHistory, setShowChatHistory] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState('round1');
   const [latestData, setLatestData] = React.useState(null);
-  const [latestLoading, setLatestLoading] = React.useState(true);
+  const [latestLoading, setLatestLoading] = React.useState(!USE_MEETING_SNAPSHOT);
   const [latestError, setLatestError] = React.useState(null);
 
   React.useEffect(() => {
-    let active = true;
-
-    if (investmentResult?.discussion) {
-      setLatestData(investmentResult);
-      setLatestError(null);
-      setLatestLoading(false);
-      return () => {
-        active = false;
-      };
-    }
-
+    if (USE_MEETING_SNAPSHOT) return undefined;
     if (investmentResult) {
-      // Keep the available Model 1/2 portfolio visible while asking the
-      // backend whether a completed Model 3 discussion already exists.
       setLatestData(investmentResult);
     }
-    setLatestLoading(true);
-
-    fetchLatestInvestment()
-      .then((result) => {
-        if (active) {
-          setLatestData(result);
-          setLatestError(null);
+    return startMeetingPolling({
+      fetchLatest: fetchLatestInvestment,
+      onData: (data) => {
+        setLatestData(current => reconcileInvestmentResult(investmentResult || current, data));
+        setLatestError(null);
+        setLatestLoading(false);
+      },
+      onError: (error) => {
+        if (error.code === 'configuration_busy') return;
+        if (error.code === 'configuration_unavailable') {
+          setLatestData(current => stoppedInvestmentResult(current || investmentResult, error.message));
         }
-      })
-      .catch((requestError) => {
-        if (active) {
-          setLatestError(requestError.message || '無法取得最新 Agent 結果。');
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setLatestLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
+        setLatestError(error.message || '無法取得最新 Agent 結果。');
+        setLatestLoading(false);
+      },
+    });
   }, [investmentResult]);
 
   // Keep the meeting canvas full-bleed on phone-sized screens, but cap it on
@@ -999,13 +818,23 @@ function MeetingProcess({ onBack, style }) {
   );
   const layoutScale = contentWidth / DESIGN_WIDTH;
   const panelWidth = contentWidth - 36 * layoutScale;
-  const displayData = investmentResult?.discussion
-    ? investmentResult
-    : latestData || investmentResult;
+  const displayData = USE_MEETING_SNAPSHOT ? meetingSnapshot : latestData || investmentResult;
   const discussionReady = Boolean(displayData?.discussion);
   const portfolioAllocation = summarizePortfolio(displayData?.portfolio);
-  const activeRound = activeTab === 'round2' ? 2 : 1;
-  const allMessages = displayData?.discussion?.messages || [];
+  const roundNumbers = discussionRoundNumbers(displayData);
+  const meetingTabs = [
+    ...roundNumbers.map((round) => ({
+      id: `round${round}`,
+      label: `第${round}輪`,
+    })),
+    { id: 'final', label: '最終裁決' },
+  ];
+  const tabShellWidth = contentWidth / Math.max(meetingTabs.length, 1);
+  const parsedActiveRound = /^round(\d+)$/.exec(activeTab);
+  const activeRound = parsedActiveRound
+    ? Number(parsedActiveRound[1])
+    : roundNumbers[0] || 1;
+  const allMessages = meetingMessages(displayData);
   const roundMessages = allMessages.filter(
     (message) =>
       (message.type === 'moderator' && message.round === 0) ||
@@ -1020,8 +849,8 @@ function MeetingProcess({ onBack, style }) {
     displayData?.discussion?.structured_decisions?.[
       `risk_averse_round${activeRound}`
     ];
-  const seekingCandidates = candidateStockRows(displayData, seekingDecision);
-  const averseCandidates = candidateStockRows(displayData, averseDecision);
+  const seekingCandidates = suggestionRows(displayData, seekingDecision);
+  const averseCandidates = suggestionRows(displayData, averseDecision);
   const agentMeetingWidth = pageWidth;
   const agentMeetingHeight = agentMeetingWidth * (246 / 575);
 
@@ -1070,7 +899,7 @@ function MeetingProcess({ onBack, style }) {
                 {
                   width: 38 * layoutScale,
                   height: 38 * layoutScale,
-                  top: 50 * layoutScale,
+                  top: Math.max(56 * layoutScale, insets.top),
                   right: 28 * layoutScale,
                 },
               ]}
@@ -1105,7 +934,7 @@ function MeetingProcess({ onBack, style }) {
               ]}
             />
 
-            {MEETING_TABS.map((tab) => {
+            {meetingTabs.map((tab) => {
               const active = activeTab === tab.id;
 
               return (
@@ -1114,7 +943,7 @@ function MeetingProcess({ onBack, style }) {
                   style={[
                     styles.tabShell,
                     {
-                      width: contentWidth * 0.33,
+                      width: tabShellWidth,
                       height: (active ? 122 : 103) * layoutScale,
                       borderTopLeftRadius: 42 * layoutScale,
                       borderTopRightRadius: 42 * layoutScale,
@@ -1129,7 +958,7 @@ function MeetingProcess({ onBack, style }) {
                     style={({ pressed }) => [
                       styles.tabButton,
                       {
-                        width: contentWidth * 0.27,
+                        width: tabShellWidth * 0.86,
                         height: 72 * layoutScale,
                         borderRadius: 36 * layoutScale,
                       },
@@ -1163,14 +992,20 @@ function MeetingProcess({ onBack, style }) {
             />
           ) : (
             <>
+              {Object.values(displayData?.discussion?.structured_decisions || {}).some(d => d?.claim_response_complete === false) && (
+                <Text style={{ color: '#efb39c', marginBottom: 8 }}>
+                  討論狀態：部分顧問未完成對方主張回應，這份紀錄不代表雙方已達成共識。
+                </Text>
+              )}
               <RoundChat
                 messages={previewMessages}
                 loading={latestLoading}
                 error={latestError}
                 hasData={Boolean(displayData)}
-                discussionPending={discussionRunPending}
-                discussionError={discussionRunError}
-                onStartDiscussion={startDiscussion}
+                discussionPending={!USE_MEETING_SNAPSHOT && (discussionRunPending || ['queued', 'running'].includes(displayData?.discussion_status?.status))}
+                discussionStatus={displayData?.discussion_status}
+                discussionError={USE_MEETING_SNAPSHOT ? null : (['failed', 'superseded', 'not_started'].includes(displayData?.discussion_status?.status) ? displayData.discussion_status.message : discussionRunError)}
+                onStartDiscussion={USE_MEETING_SNAPSHOT ? undefined : startDiscussion}
                 layoutScale={layoutScale}
                 width={panelWidth}
                 onOpenHistory={() => setShowChatHistory(true)}
@@ -1180,26 +1015,26 @@ function MeetingProcess({ onBack, style }) {
                 style={[
                   styles.roundAllocationList,
                   {
-                    width: panelWidth - 36 * layoutScale,
+                    width: panelWidth,
                     marginTop: 24 * layoutScale,
                   },
                 ]}
               >
                 <CandidateCard
-                  title="風險追求"
+                  title="報酬觀點"
                   candidates={seekingCandidates}
                   icon={RISK_SEEKING_IMAGE}
                   accent="#526BFF"
                   layoutScale={layoutScale}
-                  width={(panelWidth - 54 * layoutScale) / 2}
+                  width={(panelWidth - 18 * layoutScale) / 2}
                 />
                 <CandidateCard
-                  title="風險趨避"
+                  title="風險觀點"
                   candidates={averseCandidates}
                   icon={RISK_AVERSE_IMAGE}
                   accent="#E47700"
                   layoutScale={layoutScale}
-                  width={(panelWidth - 54 * layoutScale) / 2}
+                  width={(panelWidth - 18 * layoutScale) / 2}
                 />
               </View>
             </>
@@ -1214,12 +1049,11 @@ function MeetingProcess({ onBack, style }) {
               },
             ]}
           >
-            <AssetSvg
-              asset={AGENT_MEETING_IMAGE}
-              width={agentMeetingWidth}
-              height={agentMeetingHeight}
+            <Image
+              source={AGENT_MEETING_IMAGE}
+              resizeMode="contain"
               accessibilityLabel="AgentMeeting"
-              style={styles.agentMeeting}
+              style={[styles.agentMeeting, { width: agentMeetingWidth, height: agentMeetingHeight }]}
             />
           </View>
         </View>

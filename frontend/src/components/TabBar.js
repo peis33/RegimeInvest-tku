@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LocalSvg } from 'react-native-svg/css';
 import useViewportDimensions from '../hooks/useViewportDimensions';
@@ -22,6 +22,7 @@ const BAR_WIDTH_RATIO = 0.86;
 const MAX_BAR_WIDTH = 420;
 const PILL_INSET = 1;
 const ICON_SIZE = 32;
+const TAB_LABELS = { Compare: '對比', Analyze: '各股', Home: '首頁', Setting: '設定' };
 
 export default function TabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets();
@@ -74,6 +75,7 @@ export default function TabBar({ state, descriptors, navigation }) {
             const { options } = descriptors[route.key];
             const focused = state.index === index;
             const visuallyFocused = focusedIndex === index;
+            const label = TAB_LABELS[route.name] || options.title || route.name;
             const onPress = () => {
               const event = navigation.emit({
                 type: 'tabPress',
@@ -82,18 +84,8 @@ export default function TabBar({ state, descriptors, navigation }) {
               });
 
               if (!focused && !event.defaultPrevented) {
-                navigation.navigate(
-                  route.name,
-                  route.name === 'Analyze'
-                    ? { categoryId: null, investorType: null, customGroup: false }
-                    : undefined,
-                );
-              } else if (focused && route.name === 'Analyze') {
-                navigation.setParams({
-                  categoryId: null,
-                  investorType: null,
-                  customGroup: false,
-                });
+                // Switching tabs must preserve the group selected in More.
+                navigation.navigate(route.name);
               }
             };
 
@@ -102,7 +94,7 @@ export default function TabBar({ state, descriptors, navigation }) {
                 key={route.key}
                 accessibilityRole="button"
                 accessibilityState={visuallyFocused ? { selected: true } : {}}
-                accessibilityLabel={options.tabBarAccessibilityLabel || route.name}
+                accessibilityLabel={options.tabBarAccessibilityLabel || label}
                 onPress={onPress}
                 style={styles.tab}
               >
@@ -113,6 +105,11 @@ export default function TabBar({ state, descriptors, navigation }) {
                     height={ICON_SIZE}
                     pointerEvents="none"
                   />
+                ) : null}
+                {visuallyFocused ? (
+                  <Text numberOfLines={1} maxFontSizeMultiplier={1.2} style={styles.tabLabel}>
+                    {label}
+                  </Text>
                 ) : null}
               </Pressable>
             );
@@ -166,12 +163,19 @@ const styles = StyleSheet.create({
       'inset 2px 2px 4px rgba(255, 255, 255, 0.3), inset -2px -2px 4px rgba(22, 22, 22, 0.18)',
   },
   row: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     flexDirection: 'row',
   },
   tab: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  tabLabel: {
+    marginTop: 2,
+    color: '#303330',
+    fontSize: 11,
+    lineHeight: 15,
+    textAlign: 'center',
   },
 });

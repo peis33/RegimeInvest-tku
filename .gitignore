@@ -107,3 +107,28 @@ backend/regime_invest/end_to_end_app_pipeline_report.txt
 backend/regime_invest/model_3_runtime_status.json
 backend/regime_invest/experiment_model_2_candidate_selection_audit.csv
 backend/regime_invest/experiment_model_2_candidate_selection_summary.csv
+
+# Device tokens and alert delivery records
+backend/data/
+
+frontend/dist-demo/
+
+# Local discussion records and generated results
+frontend/src/data/meetingSnapshot.json
+backend/regime_invest/configuration_state.json
+backend/regime_invest/allocation_reuse.json
+backend/regime_invest/model_3_final_output.csv
+backend/regime_invest/model_3_final_discussion_output.json
+backend/regime_invest/model_3_advisory_allocation.csv
+backend/regime_invest/model_3_final_production_audit.csv
+backend/regime_invest/model_3_final_production_report.txt
+backend/tests/results/
+/model_*_output.csv
+/model_*_metadata.csv
+/model_2_candidate_stocks.csv
+/model_*_audit.csv
+/model_3*_output.json
+/model_3*_report.txt
+/portfolio_allocation_output.csv
+/end_to_end_app_pipeline_*
+/experiment_model_2_candidate_selection_*

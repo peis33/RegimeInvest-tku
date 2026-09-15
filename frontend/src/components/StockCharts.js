@@ -17,10 +17,10 @@ const DETAIL_HEIGHT = 298;
 const COMPARISON_HEIGHT = 258;
 
 const CHART_COLORS = {
-  background: '#F4F4F4',
-  grid: '#D8D8D8',
-  axis: '#777777',
-  text: '#4C4C4C',
+  background: '#2E2F2E',
+  grid: 'rgba(216, 216, 216, 0.25)',
+  axis: '#B9B9B9',
+  text: '#D9D9D9',
   rise: '#E5392F',
   fall: '#279447',
   movingAverage5: '#E85D50',

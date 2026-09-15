@@ -1,13 +1,15 @@
 import React from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   View,
 } from 'react-native';
 import AssetSvg from '../components/AssetSvg';
+import Text from '../components/MeetingText';
+import { meetingMessages } from '../services/meetingSummary';
 import { fetchLatestInvestment } from '../services/investmentApi';
 import useViewportDimensions from '../hooks/useViewportDimensions';
 
@@ -226,6 +228,7 @@ function MessageDetails({ message, layoutScale }) {
 }
 
 function ChatHistory({ onBack, style, initialData }) {
+  const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const [data, setData] = React.useState(initialData || null);
   const [loading, setLoading] = React.useState(!initialData);
@@ -281,11 +284,13 @@ function ChatHistory({ onBack, style, initialData }) {
     1,
   );
   const cancelSize = 38 * meetingLayoutScale;
+  const closeTouchSize = Math.max(44, cancelSize);
+  const headerHeight = Math.max(64, 87 * layoutScale);
   const cancelRight =
     (contentWidth - meetingContentWidth) / 2 - 2 * meetingLayoutScale;
 
   const market = data?.market || {};
-  const messages = data?.discussion?.messages || [];
+  const messages = meetingMessages(data);
 
   const toggleMessage = (messageId) => {
     setExpandedMessageIds((current) => ({
@@ -344,7 +349,7 @@ function ChatHistory({ onBack, style, initialData }) {
             ]}
           >
             {message.speaker}
-            {message.round > 0 ? ` · 第 ${message.round} 輪` : ''}
+            {message.round > 0 && message.role !== 'judge' ? ` · 第 ${message.round} 輪` : ''}
           </Text>
           <Text
             style={[
@@ -355,7 +360,7 @@ function ChatHistory({ onBack, style, initialData }) {
               },
             ]}
           >
-            {cleanUserFacingText(message.text)}
+            {cleanUserFacingText(message.text).replace('其餘調整列在下方。', '完整增減請回到該輪的建議卡查看。')}
           </Text>
           {message.evidence?.length || message.decision ? (
             <Pressable
@@ -376,39 +381,37 @@ function ChatHistory({ onBack, style, initialData }) {
               </Text>
             </Pressable>
           ) : null}
-          {isExpanded ? (
-            <MessageDetails message={message} layoutScale={layoutScale} />
-          ) : null}
         </View>
       </View>
     );
   };
 
   return (
-    <View style={[styles.container, style, { width: screenWidth }]}>
+    <View style={[styles.container, style, { width: screenWidth, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <View
         style={[
           styles.header,
           {
             width: contentWidth,
-            height: 87 * layoutScale,
+            height: headerHeight,
           },
         ]}
       >
-        <Text style={[styles.title, { fontSize: 22 * layoutScale }]}>
+        <Text style={[styles.title, { fontSize: 22 * layoutScale, paddingHorizontal: closeTouchSize + 12 }]}>
           chat history
         </Text>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="close chat history"
+          accessibilityLabel="關閉 chat history"
           onPress={onBack}
+          hitSlop={8}
           style={[
             styles.closeButton,
             {
-              width: cancelSize,
-              height: cancelSize,
-              top: 32 * meetingLayoutScale,
-              right: cancelRight,
+              width: closeTouchSize,
+              height: closeTouchSize,
+              top: (headerHeight - closeTouchSize) / 2,
+              right: Math.max(8, cancelRight, insets.right),
             },
           ]}
         >
@@ -451,18 +454,6 @@ function ChatHistory({ onBack, style, initialData }) {
           </View>
         ) : (
           <View style={{ width: contentWidth }}>
-            <View style={[styles.summaryCard, { marginBottom: 22 * layoutScale }]}>
-              <Text style={[styles.summaryTitle, { fontSize: 15 * layoutScale }]}>
-                本次投資會議
-              </Text>
-              <Text style={[styles.summaryText, { fontSize: 13 * layoutScale }]}>
-                {market.target_month || '目前月份'} · 市場狀態：{market.predicted_regime || '--'}
-              </Text>
-              <Text style={[styles.summaryText, { fontSize: 12 * layoutScale }]}>
-                Bear {formatPercent(market.prob_Bear)}　Bull {formatPercent(market.prob_Bull)}　Sideways {formatPercent(market.prob_Sideways)}
-              </Text>
-            </View>
-
             {messages.length > 0 ? (
               messages.map(renderMessage)
             ) : (

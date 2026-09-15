@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-RUN ALL MODELS — APP PRODUCTION PIPELINE v2.2
+RUN ALL MODELS — FINAL UPDATED PIPELINE
 
 Frozen chain:
 1) Model 1 V5 App Duration
 2) Model 2 Candidate Selection
 3) Model 2 V2 Strong App Profile
-4) Model 3 V5.1 Structured Multi-Agent
+4) Model 3 Final-Polished Multi-Agent
 
 No parameter tuning is performed here.
 """
 
 from pathlib import Path
 from datetime import datetime
-import importlib.util
-import os
 import subprocess
+import os
 import sys
 import time
 import csv
@@ -37,8 +36,8 @@ STAGES = [
         ],
     },
     {
-        "name": "Model 2 Candidate Selection",
-        "script": "model_2_candidate_selection_production.py",
+        "name": "Model 2 Candidate Selection UPDATED",
+        "script": "model_2_candidate_selection_production_UPDATED.py",
         "inputs": [
             "model_1_prediction_output.csv",
             "model_2_investor_profile_historical.csv",
@@ -50,8 +49,8 @@ STAGES = [
         ],
     },
     {
-        "name": "Model 2 V2 Strong App Profile",
-        "script": "model_2_v2_strong_production_app_profile.py",
+        "name": "Model 2 V2 Strong App Profile UPDATED",
+        "script": "model_2_v2_strong_production_app_profile_UPDATED.py",
         "inputs": [
             "model_1_prediction_output.csv",
             "model_2_candidate_stocks.csv",
@@ -64,51 +63,24 @@ STAGES = [
         ],
     },
     {
-        "name": "Model 3 V5.1 Structured Multi-Agent",
-        "script": "model_3_v5_1_final_freeze_candidate.py",
+        "name": "Model 3 Final-Polished Multi-Agent",
+        "script": "model_3_final_polished.py",
         "inputs": [
             "portfolio_allocation_output.csv",
             "model_1_prediction_output.csv",
         ],
         "outputs": [
-            "model_3_v5_1_final_output.csv",
-            "model_3_v5_1_discussion_output.json",
-            "model_3_v5_1_production_report.txt",
-            "model_3_v5_1_production_audit.csv",
+            "model_3_final_output.csv",
+            "model_3_final_discussion_output.json",
+            "model_3_advisory_allocation.csv",
+            "model_3_final_production_report.txt",
+            "model_3_final_production_audit.csv",
         ],
     },
 ]
 
 AUDIT_FILE = BASE / "end_to_end_app_pipeline_audit.csv"
 REPORT_FILE = BASE / "end_to_end_app_pipeline_report.txt"
-
-MODEL_DEPENDENCIES = {
-    "model_1_v5_production_app_duration.py": (
-        "tensorflow",
-        "hmmlearn",
-        "sklearn",
-        "scipy",
-    ),
-    "model_3_v5_1_final_freeze_candidate.py": (
-        "ollama",
-    ),
-}
-
-def module_available(name):
-    """檢查目前管線使用的 Python 是否能找到指定套件。"""
-    try:
-        return importlib.util.find_spec(name) is not None
-    except (ImportError, ModuleNotFoundError, ValueError):
-        return False
-
-
-def missing_stage_dependencies(stage):
-    """列出階段缺少的套件；缺少時必須直接停止，不使用舊輸出。"""
-    return [
-        name
-        for name in MODEL_DEPENDENCIES.get(stage["script"], ())
-        if not module_available(name)
-    ]
 
 
 def add(audit, stage, check, ok, detail):
@@ -167,8 +139,7 @@ def validate_profile(audit):
         "investor_type": investor_type,
         "risk_preference": risk,
         "budget": budget,
-        # 與登入頁及 Model 2 的預設一致：未省略設定時允許零股。
-        "allow_fractional": bool(raw.get("allow_fractional", True)),
+        "allow_fractional": bool(raw.get("allow_fractional", False)),
     }
 
 
@@ -243,58 +214,89 @@ def validate_model2_profile(audit, profile):
 
 
 def validate_model3_app(audit):
+    """Validate the Final-Polished Model 3 integration interface only.
+
+    Run All never changes Model 3 decisions.  It verifies that the dynamic debate,
+    Judge result, advisory allocation, and Model 3 production audit were emitted.
     """
-    Validate the frozen Model 3 V5.1 App interface.
-    Integration-layer check only; does not modify Model 3 decisions.
-    """
-    p = BASE / "model_3_v5_1_discussion_output.json"
-    if not p.exists():
-        add(audit, "Interface Audit", "Model 3 discussion JSON exists", False, p.name)
+    discussion = BASE / "model_3_final_discussion_output.json"
+    advisory = BASE / "model_3_advisory_allocation.csv"
+    production_audit = BASE / "model_3_final_production_audit.csv"
+
+    required_files = [discussion, advisory, production_audit]
+    files_ok = True
+    for p in required_files:
+        ok = p.exists() and p.stat().st_size > 0
+        add(audit, "Interface Audit", f"Model 3 output exists: {p.name}", ok,
+            f"bytes={p.stat().st_size}" if ok else "MISSING/EMPTY")
+        files_ok = files_ok and ok
+    if not files_ok:
         return False
 
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(discussion.read_text(encoding="utf-8"))
     except Exception as e:
         add(audit, "Interface Audit", "Model 3 discussion JSON valid", False, repr(e))
         return False
 
-    # V5.1 deterministic discussion render. Support the actual frozen schema,
-    # while explicitly requiring all five stages.
+    rounds = data.get("rounds")
     rendered = data.get("rendered_discussion")
-    required = {
-        "risk_seeking_round1",
-        "risk_averse_round1",
-        "risk_seeking_round2",
-        "risk_averse_round2",
-        "judge",
-    }
+    consensus_status = data.get("consensus_status")
+    stop_reason = data.get("stop_reason")
+    round_count = data.get("round_count")
 
-    if isinstance(rendered, dict):
-        present = set(rendered.keys())
-        ok = required.issubset(present)
-        detail = f"rendered_discussion keys={sorted(present)}"
-    else:
-        # Some V5.1 builds expose app_display as the deterministic 5-stage list.
-        app_display = data.get("app_display")
-        ok = isinstance(app_display, list) and len(app_display) >= 5
-        detail = (
-            f"app_display stages={len(app_display)}"
-            if isinstance(app_display, list)
-            else f"available_top_level_keys={sorted(data.keys())}"
-        )
-
-    add(
-        audit,
-        "Interface Audit",
-        "Model 3 V5.1 five-stage discussion exposed",
-        ok,
-        detail,
+    dynamic_ok = (
+        isinstance(rounds, list)
+        and isinstance(round_count, int)
+        and 2 <= round_count <= 5
+        and len(rounds) == round_count
+        and consensus_status in {"consensus", "best_effort"}
     )
-    return ok
+    add(audit, "Interface Audit", "Model 3 dynamic debate interface", dynamic_ok,
+        f"status={consensus_status}; stop_reason={stop_reason}; round_count={round_count}")
 
-def run_stage(index, stage, audit, total_stages=None):
+    judge_ok = isinstance(rendered, dict) and bool(rendered.get("judge"))
+    add(audit, "Interface Audit", "Model 3 Judge render exposed", judge_ok,
+        f"rendered_keys={sorted(rendered.keys())}" if isinstance(rendered, dict) else "missing rendered_discussion")
+
+    try:
+        adv = pd.read_csv(advisory)
+        # FINAL-POLISHED writes the Judge allocation using proposed_weight_percent.
+        weight_col = "proposed_weight_percent"
+        weights = pd.to_numeric(adv[weight_col], errors="coerce") if weight_col in adv.columns else pd.Series(dtype=float)
+        adv_ok = (
+            not adv.empty
+            and weight_col in adv.columns
+            and weights.notna().all()
+            and abs(weights.sum() - 100.0) <= 0.05
+        )
+        adv_detail = (
+            f"rows={len(adv)}; weight_col={weight_col}; advisory_sum={weights.sum():.6f}"
+            if weight_col in adv.columns else f"columns={list(adv.columns)}"
+        )
+    except Exception as e:
+        adv_ok = False
+        adv_detail = repr(e)
+    add(audit, "Interface Audit", "Model 3 advisory allocation valid", adv_ok, adv_detail)
+
+    try:
+        ma = pd.read_csv(production_audit)
+        if {"check_name", "status"}.issubset(ma.columns):
+            audit_ok = not ma.empty and ma["status"].astype(str).eq("PASS").all()
+            audit_detail = f"rows={len(ma)}; failures={(~ma['status'].astype(str).eq('PASS')).sum()}"
+        else:
+            audit_ok = False
+            audit_detail = f"columns={list(ma.columns)}"
+    except Exception as e:
+        audit_ok = False
+        audit_detail = repr(e)
+    add(audit, "Interface Audit", "Model 3 production audit all PASS", audit_ok, audit_detail)
+
+    return dynamic_ok and judge_ok and adv_ok and audit_ok
+
+def run_stage(index, stage, audit):
     print("\n" + "=" * 118)
-    print(f"[{index}/{total_stages or len(STAGES)}] {stage['name']}")
+    print(f"[{index}/{len(STAGES)}] {stage['name']}")
     print("=" * 118)
 
     script = BASE / stage["script"]
@@ -310,31 +312,6 @@ def run_stage(index, stage, audit, total_stages=None):
         if not ok:
             print("STOP: missing required input:", name)
             return False, 0.0
-
-    missing_dependencies = missing_stage_dependencies(stage)
-    if missing_dependencies:
-        dependency_text = ", ".join(missing_dependencies)
-        message = (
-            f"缺少模型依賴：{dependency_text}。"
-            "不使用舊輸出，已停止本次管線。"
-        )
-        print("\nDEPENDENCY_CHECK_FAILED: " + dependency_text)
-        print(message)
-        add(
-            audit,
-            stage["name"],
-            "Model dependencies available",
-            False,
-            dependency_text,
-        )
-        add(
-            audit,
-            stage["name"],
-            "Process return code",
-            False,
-            "not started because model dependencies are missing",
-        )
-        return False, 0.0
 
     start = time.time()
     result = subprocess.run([sys.executable, str(script)], cwd=str(BASE), check=False)
@@ -361,43 +338,15 @@ def run_stage(index, stage, audit, total_stages=None):
 def main():
     audit = []
     start_all = time.time()
-    run_model3 = os.getenv("STOCKAPP_RUN_MODEL3", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-    }
-    reuse_model1 = os.getenv("STOCKAPP_REUSE_MODEL1", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    available_stages = STAGES if run_model3 else STAGES[:3]
-    active_stages = [
-        stage
-        for stage in available_stages
-        if not (
-            reuse_model1
-            and stage["script"] == "model_1_v5_production_app_duration.py"
-        )
-    ]
 
     print("=" * 118)
-    print("APP PRODUCTION — RUN ALL MODELS v2.2")
+    print("APP PRODUCTION — RUN ALL MODELS FINAL UPDATED")
     print("=" * 118)
     print("Pipeline:")
     print("Model 1 market state + duration/MTA")
-    print(" -> Model 2 candidate selection")
-    print(" -> Model 2 personalized V2 Strong allocation")
-    print(
-        " -> Model 3 multi-agent discussion/Judge"
-        if run_model3
-        else " -> Model 3 skipped (可由獨立 API 手動啟動)"
-    )
-    print(
-        "Model 1: reuse cached output (CSV sources unchanged)"
-        if reuse_model1
-        else "Model 1: run production training/inference"
-    )
+    print(" -> Model 2 candidate selection UPDATED")
+    print(" -> Model 2 personalized V2 Strong allocation UPDATED")
+    print(" -> Model 3 Final-Polished multi-agent discussion/Judge")
     print()
 
     profile = validate_profile(audit)
@@ -412,78 +361,44 @@ def main():
     print(f"- budget          : {profile['budget']:.2f}")
     print(f"- allow_fractional: {profile['allow_fractional']}")
 
+    times = {}
+    run_model3 = os.environ.get("STOCKAPP_RUN_MODEL3", "1") != "0"
+    reuse_model1 = os.environ.get("STOCKAPP_REUSE_MODEL1", "0") == "1"
     if reuse_model1:
-        # 即使來源檔案沒有變更，仍要確認目前這個 Python 環境具備
-        # Model 1 依賴；缺少依賴時不能默默沿用舊市場狀態。
-        model1_stage = STAGES[0]
-        missing_dependencies = missing_stage_dependencies(model1_stage)
-        if missing_dependencies:
-            dependency_text = ", ".join(missing_dependencies)
-            add(
-                audit,
-                model1_stage["name"],
-                "Model dependencies available",
-                False,
-                dependency_text,
-            )
-            add(
-                audit,
-                model1_stage["name"],
-                "Cached output reuse allowed",
-                False,
-                "not reused because Model 1 dependencies are missing",
-            )
-            save_audit(audit)
-            print(
-                "\nSTOP: Model 1 cached output cannot be reused because "
-                f"dependencies are missing: {dependency_text}"
-            )
-            return 1
-
         if not validate_model1(audit):
             save_audit(audit)
-            print("\nSTOP: cached Model 1 output audit failed; no reuse.")
+            print("STOP: cached Model 1 output validation failed.")
             return 1
-
-        add(
-            audit,
-            model1_stage["name"],
-            "Cached Model 1 output reused",
-            True,
-            "CSV source signatures unchanged",
-        )
-
-    times = {}
-    for i, stage in enumerate(active_stages, 1):
-        ok, sec = run_stage(i, stage, audit, len(active_stages))
+        add(audit, "Model 1", "Cached output reused", True, "App validated source signatures")
+    for i, stage in enumerate(STAGES, 1):
+        if (i == 1 and reuse_model1) or (i == 4 and not run_model3):
+            continue
+        ok, sec = run_stage(i, stage, audit)
         times[stage["name"]] = sec
         save_audit(audit)
         if not ok:
             print("\nEND-TO-END APP PIPELINE: FAIL")
             return 1
 
-        if stage["script"] == "model_1_v5_production_app_duration.py" and not validate_model1(audit):
+        if i == 1 and not validate_model1(audit):
             save_audit(audit)
             print("\nSTOP: Model 1 App interface audit failed.")
             return 1
 
-        if stage["script"] == "model_2_v2_strong_production_app_profile.py" and not validate_model2_profile(audit, profile):
+        if i == 3 and not validate_model2_profile(audit, profile):
             save_audit(audit)
             print("\nSTOP: Model 2 App profile propagation audit failed.")
             return 1
 
-        if stage["script"] == "model_3_v5_1_final_freeze_candidate.py" and not validate_model3_app(audit):
+        if i == 4 and not validate_model3_app(audit):
             save_audit(audit)
             print("\nSTOP: Model 3 App discussion interface audit failed.")
             return 1
 
     total = time.time() - start_all
     add(audit, "End-to-End", "All App production stages completed", True,
-        (
-            "Model 1 -> Model 2 Selection -> Model 2 App Profile -> Model 3"
-            if run_model3
-            else "Model 1 -> Model 2 Selection -> Model 2 App Profile; Model 3 skipped"
-        ))
+        "Model 1 -> Model 2 Selection UPDATED -> Model 2 App Profile UPDATED"
+        + (" -> Model 3 Final-Polished" if run_model3 else "; Model 3 skipped by App"))
     save_audit(audit)
 
     m1 = pd.read_csv(BASE / "model_1_prediction_output.csv").iloc[-1]
@@ -499,7 +414,6 @@ def main():
         f"budget={profile['budget']:.2f}",
         "",
         "MODEL 1 APP MARKET STATUS",
-        f"model_1_reused={reuse_model1}",
         f"target_month={m1['target_month']}",
         f"predicted_regime={m1['predicted_regime']}",
         f"prob_Bear={float(m1['prob_Bear']):.6f}",
@@ -513,11 +427,8 @@ def main():
         f"weight_sum={portfolio['final_weight'].sum():.12f}",
         "",
         "MODEL 3",
-        (
-            "discussion_output=model_3_v5_1_discussion_output.json"
-            if run_model3
-            else "discussion_output=not_run; no previous discussion reused"
-        ),
+        "discussion_output=model_3_final_discussion_output.json" if run_model3 else "discussion_output=not_run",
+        "advisory_output=model_3_advisory_allocation.csv" if run_model3 else "advisory_output=not_run",
         "",
         f"TOTAL ELAPSED={total:.1f}s",
         "FINAL RESULT: END-TO-END APP PIPELINE PASS",

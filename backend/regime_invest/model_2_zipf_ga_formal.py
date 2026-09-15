@@ -431,13 +431,12 @@ def calculate_position_table(selected: pd.DataFrame, weights: np.ndarray, profil
             actual_amount = allocated
             position_type = "fractional_share"
         else:
-            # 台股 1 張 = 1,000 股；關閉零股時只能配置完整的張數。
             lots = np.floor(allocated / (price * LOT_SIZE))
             shares = lots * LOT_SIZE
             actual_amount = shares * price
             position_type = "whole_lot"
 
-        actual_weight = actual_amount / budget if budget > 0 else float(weights[i])
+        actual_weight = actual_amount / budget
 
         rows.append({
             "target_month": prediction["target_month"],
@@ -457,8 +456,6 @@ def calculate_position_table(selected: pd.DataFrame, weights: np.ndarray, profil
             "expected_return": row["expected_return"],
             "risk": row["risk"],
             "selection_score": row["selection_score"],
-            # 未開啟零股時，整股取整後的實際成交金額可能低於最佳化目標；
-            # 輸出實際配置比例，才能讓股票與現金比例正確合計為 100%。
             "final_weight": float(actual_weight),
             "final_weight_percent": round(float(actual_weight) * 100, 2),
             "allocated_amount": round(float(actual_amount), 2),

@@ -9,13 +9,13 @@ import {
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AssetSvg from '../components/AssetSvg';
-import MeetingProcess from './MeetingProcess';
+import InAppAlertBanner from '../components/InAppAlertBanner';
+import { Path, Svg } from 'react-native-svg';
 import {
   InstitutionalChart,
   MarginChart,
   RecentCharts,
 } from '../components/StockCharts';
-import { TAB_BAR_STYLE } from '../components/TabBar';
 import {
   fetchLatestInvestment,
   fetchLatestStockCharts,
@@ -30,8 +30,6 @@ const CURRENT_STATUS_FALL_IMAGE = require('../assets/image/CurrentStatus_fall.sv
 const BULL_IMAGE = require('../assets/image/Bull.svg');
 const BEAR_IMAGE = require('../assets/image/Bear.svg');
 const SIDEWAYS_IMAGE = require('../assets/image/Sideways.svg');
-const ACTION_WINDOW_IMAGE = require('../assets/image/ActionWindow.svg');
-const AGENT_IMAGE = require('../assets/image/agent.svg');
 const GRID_SIZE = 44;
 const MARKET_CHART_SYMBOL = 'Y9999';
 const HOME_CHART_RATIOS = {
@@ -40,8 +38,6 @@ const HOME_CHART_RATIOS = {
   margin: 298 / 576,
 };
 const REGIME_ORDER = ['bull', 'sideways', 'bear'];
-const MARKET_WARNING_TEXT =
-  '目前市場仍為多頭，耐久度已進入成熟期。此階段散戶最常犯的錯誤是看到上漲就追加倉位，忽略結構轉折風險。';
 const BULL_FRAME_COLOR = 'rgba(169, 62, 62, 0.7)';
 const BULL_RETURN_COLOR = '#FF5858';
 const BULL_METRIC_COLOR = '#EEB9B9';
@@ -62,8 +58,7 @@ const MARKET_STATUS_CONFIG = {
     borderColor: BULL_FRAME_COLOR,
     metricColor: '#F0B2B7',
     summaryMetricColor: BULL_METRIC_COLOR,
-    defaultTab: 'recent',
-    aspectRatio: 428 / 474,
+    aspectRatio: 475 / 469,
   },
   bear: {
     asset: BEAR_IMAGE,
@@ -73,8 +68,7 @@ const MARKET_STATUS_CONFIG = {
     statusAssetHeight: 20,
     accent: '#2CB331',
     metricColor: '#7FF36A',
-    defaultTab: 'margin',
-    aspectRatio: 229 / 224,
+    aspectRatio: 454 / 427,
   },
   sideways: {
     asset: SIDEWAYS_IMAGE,
@@ -82,12 +76,11 @@ const MARKET_STATUS_CONFIG = {
     statusAsset: CURRENT_STATUS_FLAT_IMAGE,
     statusAssetWidth: 28,
     statusAssetHeight: 13,
-    accent: '#B28A2E',
+    accent: '#EEB609',
     borderColor: SIDEWAYS_FRAME_COLOR,
-    metricColor: '#E7CD95',
+    metricColor: '#FFE389',
     summaryMetricColor: SIDEWAYS_METRIC_COLOR,
     metricBackgroundColor: SIDEWAYS_METRIC_BACKGROUND,
-    defaultTab: 'institutional',
     aspectRatio: 575 / 447,
     layout: 'wide',
   },
@@ -118,6 +111,7 @@ function getMarketStatusConfig(regime) {
 }
 
 function toFiniteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -197,6 +191,7 @@ function ProbabilityBars({
         { width, height, padding, marginTop },
       ]}
     >
+      <Text style={styles.probabilityTitle}>各市場狀態發生機率</Text>
       {probabilities.map(({ key, probability, config }, index) => {
         const fillWidth = probability === null
           ? 0
@@ -273,8 +268,15 @@ function formatDuration(market) {
     return lower === upper ? `${lower}週` : `${lower}-${upper}週`;
   }
 
-  const steps = toFiniteNumber(market?.expected_regime_duration_steps);
-  return steps !== null && steps > 0 ? `${Math.round(steps)}步` : '--';
+  return '--';
+}
+
+function getMarketWarning(regime, duration) {
+  const estimate = duration === '--' ? '' : `，預估剩餘 ${duration}`;
+  if (regime === 'bull') return `目前為牛市${estimate}，留意回檔風險，避免追高。`;
+  if (regime === 'bear') return `目前為熊市${estimate}，留意下行風險，避免急於抄底。`;
+  if (regime === 'sideways') return '目前市場方向不明，建議先觀望，避免頻繁進場。';
+  return '等待模型市場狀態資料。';
 }
 
 function getMarketReturnPercent(snapshot, chartData) {
@@ -352,6 +354,7 @@ function SummaryMetric({
   borderWidth,
   horizontalPadding,
   backgroundColor,
+  speechBubble = false,
 }) {
   return (
     <View
@@ -366,6 +369,13 @@ function SummaryMetric({
         },
       ]}
     >
+      {speechBubble ? (
+        <Svg pointerEvents="none" width={38 * textScale} height={38 * textScale}
+          viewBox="0 0 38 38" style={{ position: 'absolute', left: '36%', top: '100%', zIndex: 3 }}>
+          <Path d="M0 0 L32 35 L17 0" fill={backgroundColor || '#202120'}
+            stroke={accent} strokeWidth={2} strokeLinejoin="round" />
+        </Svg>
+      ) : null}
       <Text
         style={[
           styles.summaryMetricLabel,
@@ -562,12 +572,16 @@ export default function Home() {
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useViewportDimensions();
   const {
-    actionWindowEnabled,
+    priceAlerts,
     investmentResult,
+    investmentRunPending,
+    investmentRunError,
   } = useAppSettings();
-  const [showMeetingProcess, setShowMeetingProcess] = useState(false);
   const [marketRegime, setMarketRegime] = useState(null);
   const [latestInvestment, setLatestInvestment] = useState(null);
+  const [investmentFetchError, setInvestmentFetchError] = useState(null);
+  const [investmentLoading, setInvestmentLoading] = useState(false);
+  const [investmentRetry, setInvestmentRetry] = useState(0);
   const [marketCharts, setMarketCharts] = useState(null);
   const [marketChartLoading, setMarketChartLoading] = useState(true);
   const [marketChartError, setMarketChartError] = useState(null);
@@ -583,6 +597,12 @@ export default function Home() {
     useCallback(() => {
       let active = true;
 
+      setInvestmentFetchError(null);
+      if (investmentRunPending) {
+        setLatestInvestment(null);
+        return () => { active = false; };
+      }
+      setInvestmentLoading(true);
       fetchLatestInvestment()
         .then((result) => {
           if (active) {
@@ -590,8 +610,19 @@ export default function Home() {
             setMarketRegime(result?.market?.predicted_regime || null);
           }
         })
-        .catch(() => {});
+        .catch((error) => {
+          if (active) setInvestmentFetchError(error?.message || '無法取得模型結果');
+        })
+        .finally(() => {
+          if (active) setInvestmentLoading(false);
+        });
+      return () => { active = false; };
+    }, [investmentRunPending, investmentRetry]),
+  );
 
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
       setMarketChartLoading(true);
       setMarketChartError(null);
       fetchLatestStockCharts(MARKET_CHART_SYMBOL)
@@ -615,34 +646,36 @@ export default function Home() {
     }, []),
   );
 
-  useEffect(() => {
-    navigation.setOptions({
-      tabBarStyle:
-        showMeetingProcess
-          ? { display: 'none' }
-          : TAB_BAR_STYLE,
-    });
-  }, [navigation, showMeetingProcess]);
-
-  const market = latestInvestment?.market || {};
-  const discussionReady = Boolean(
-    investmentResult?.discussion || latestInvestment?.discussion,
-  );
-  const marketSnapshot =
-    latestInvestment?.market_snapshot || latestInvestment?.marketSnapshot || null;
+  // Login and settings requests publish their completed result through context.
+  // Do not leave Home stuck with the 409 it received during that computation.
+  const resolvedInvestment = investmentRunPending ? null : investmentResult || latestInvestment;
+  const market = resolvedInvestment?.market || {};
+  const chartPoints = Array.isArray(marketCharts?.points) ? marketCharts.points : [];
+  const latestChartPoint = chartPoints[chartPoints.length - 1];
+  const investmentSnapshot = resolvedInvestment?.market_snapshot || resolvedInvestment?.marketSnapshot;
+  const marketSnapshot = latestChartPoint
+    ? { ...investmentSnapshot, ...latestChartPoint }
+    : investmentSnapshot || null;
+  const modelStatusError = investmentRunError || investmentFetchError;
+  const modelStatusMessage = investmentRunPending
+    ? '正在計算模型一、二，完成後會自動更新…'
+    : modelStatusError
+      ? `模型結果載入失敗：${modelStatusError}`
+      : investmentLoading ? '正在讀取模型結果…' : '尚未取得模型結果';
+  const marketDataDate = latestChartPoint?.date || marketSnapshot?.date;
   const regimeProbabilities = getRegimeProbabilities(market);
   const hasRegimeProbabilityData = regimeProbabilities.some(
     ({ probability }) => probability !== null,
   );
   const dominantRegimeKey = getDominantRegimeKey(
     market,
-    marketRegime || market.predicted_regime,
+    market.predicted_regime || (resolvedInvestment ? marketRegime : null),
   );
   const marketKey = dominantRegimeKey || 'sideways';
   const marketStatus = getMarketStatusConfig(marketKey);
   const orderedRegimeProbabilities = [...regimeProbabilities].sort((left, right) => {
     if (left.probability === null) {
-      return 1;
+      return right.probability === null ? 0 : 1;
     }
     if (right.probability === null) {
       return -1;
@@ -650,13 +683,9 @@ export default function Home() {
     return right.probability - left.probability;
   });
   const durationLabel = formatDuration(market);
-  const durationMatch = durationLabel.match(/^(.+?)(週|步)$/);
+  const durationMatch = durationLabel.match(/^(.+?)(週)$/);
   const durationValue = durationMatch ? durationMatch[1] : durationLabel;
   const durationUnit = durationMatch ? durationMatch[2] : null;
-  const durationSteps = toFiniteNumber(market.expected_regime_duration_steps);
-  const remainingStepsLabel = durationSteps === null
-    ? `預估剩餘 ${durationLabel}`
-    : `剩餘 ${formatNumber(durationSteps, 1)}步`;
   const marketReturnPercent = getMarketReturnPercent(
     marketSnapshot,
     marketCharts,
@@ -664,33 +693,24 @@ export default function Home() {
   const marketChangeLabel = formatMarketChange(marketReturnPercent);
   const marketReturnTone = getMarketReturnTone(marketReturnPercent);
 
-  useEffect(() => {
-    setActiveHomeTab(marketStatus.defaultTab);
-  }, [marketKey, marketStatus.defaultTab]);
-
   const warningWidth = Math.min(screenWidth * 0.84, 485);
-  const noticeSize = Math.min(46, Math.max(36, warningWidth * (46 / 485)));
-  const warningHeight = Math.max(
-    noticeSize + 20,
-    Math.min(98, screenWidth * (62 / 438)),
-  );
-  const marketWarningText = MARKET_WARNING_TEXT;
+  const noticeSize = Math.min(28, Math.max(22, warningWidth * (26 / 318)));
+  const warningHeight = Math.max(38, noticeSize + 12);
+  const marketWarningText = getMarketWarning(dominantRegimeKey, durationLabel);
   const statusWidth = Math.min(screenWidth * 0.31, 150);
-  const forecastWidth = Math.min(screenWidth * 0.22, 110);
   const changeWidth = Math.min(screenWidth * 0.22, 108);
   const statusPillHeight = Math.max(
     28,
     Math.min(32, screenWidth * (30 / 438)),
   );
   const statusHeight = statusPillHeight;
-  const forecastHeight = statusPillHeight;
   const changeHeight = statusPillHeight;
+  const changeMarginTop = -8;
   const statusIconScale = Math.min(0.7, statusPillHeight / 24);
   const statusIconWidth = marketStatus.statusAssetWidth * statusIconScale;
   const statusIconHeight = marketStatus.statusAssetHeight * statusIconScale;
-  const statusGap = Math.max(8, screenWidth * 0.018);
   const summaryReferenceScale = Math.min(1, screenWidth / 586);
-  const summaryWidth = Math.min(screenWidth * 0.84, 500);
+  const summaryWidth = Math.min(screenWidth * 0.9, 500);
   const summaryGap = Math.max(10, Math.min(16, screenWidth * (16 / 438)));
   const summaryMetricHeight = Math.min(
     96,
@@ -709,8 +729,6 @@ export default function Home() {
     8,
     Math.min(12, screenWidth * (12 / 586)),
   );
-  const actionWidth = Math.min(screenWidth * 0.86, 500);
-  const actionHeight = actionWidth * (100 / 440);
   const extraChartWidth = screenWidth;
   const activeTab =
     HOME_TABS.find((tab) => tab.key === activeHomeTab) || HOME_TABS[0];
@@ -721,48 +739,11 @@ export default function Home() {
     marketCharts,
   );
   const isWideMarketAnimal = marketStatus.layout === 'wide';
-  const nonWideAnimalScale = marketKey === 'bull'
-    ? 0.82
-    : marketKey === 'bear'
-      ? 0.8
-      : 0.6;
-  const marketAnimalWidth = isWideMarketAnimal
-    ? screenWidth
-    : Math.min(
-        extraChartWidth * (
-          marketKey === 'bull'
-            ? 0.84
-            : marketKey === 'bear'
-              ? 0.84
-              : 0.72
-        ),
-        screenWidth * nonWideAnimalScale,
-      );
-  const marketAnimalImageHeight = isWideMarketAnimal
-    ? marketAnimalWidth * (447 / 575)
-    : marketAnimalWidth / marketStatus.aspectRatio;
-  const cropBullAnimal = !isWideMarketAnimal && marketKey === 'bull';
-  const bullAnimalInset = cropBullAnimal
-    ? marketAnimalImageHeight * (34 / 369)
-    : 0;
-  const bullAnimalVisualGap = cropBullAnimal
-    ? Math.max(16, screenWidth * (20 / 438))
-    : 0;
-  const marketAnimalImageTop = isWideMarketAnimal
-    ? -(marketAnimalWidth * (125 / 575))
-    : cropBullAnimal
-      ? bullAnimalVisualGap - bullAnimalInset
-      : 0;
-  const marketAnimalHeight = isWideMarketAnimal
-    ? marketAnimalWidth / (575 / 272)
-    : cropBullAnimal
-      ? Math.max(
-          0,
-          marketAnimalImageHeight + marketAnimalImageTop - bullAnimalInset,
-        )
-      : marketAnimalImageHeight;
-  const agentWidth = actionWidth;
-  const agentHeight = agentWidth * (65 / 497);
+  const marketAnimalWidth = isWideMarketAnimal ? Math.min(screenWidth, 575) : Math.min(screenWidth * 0.84, 475);
+  const marketAnimalImageHeight = marketAnimalWidth / marketStatus.aspectRatio;
+  // Sideways.svg includes empty space above the snake. Crop that space only.
+  const marketAnimalImageTop = isWideMarketAnimal ? -marketAnimalWidth * (125 / 575) : 0;
+  const marketAnimalHeight = isWideMarketAnimal ? marketAnimalWidth * (272 / 575) : marketAnimalImageHeight;
   const probabilityWidth = Math.min(screenWidth * 0.9, 500);
   const probabilityPadding = Math.max(
     12,
@@ -795,55 +776,14 @@ export default function Home() {
   );
   const probabilityValueLineHeight = probabilityValueFontSize * 1.2;
   const probabilityPanelHeight =
-    probabilityPadding * 2 +
+    probabilityPadding * 2 + 24 +
     probabilityRowHeight * REGIME_ORDER.length +
     probabilityRowGap * (REGIME_ORDER.length - 1);
   const probabilityGap = Math.max(10, screenWidth * 0.025);
-  const agentGap = Math.max(24, screenWidth * 0.06);
-  const marketAnimalMarginTop = cropBullAnimal
-    ? 0
-    : Math.max(18, screenWidth * 0.04);
-  const marketStageTop =
-    insets.top +
-    32 +
-    warningHeight +
-    14 +
-    Math.max(statusHeight, forecastHeight) +
-    16 +
-    summaryMetricHeight;
-  const agentStageTop =
-    marketAnimalMarginTop +
-    marketAnimalHeight +
-    probabilityGap +
-    probabilityPanelHeight +
-    agentGap;
-  const agentTop =
-    marketStageTop + agentStageTop;
-
+  const marketAnimalMarginTop = Math.max(18, screenWidth * 0.04);
   const openAnalyze = useCallback(() => {
-    navigation.navigate('Analyze', {
-      categoryId: null,
-      investorType: null,
-      customGroup: false,
-    });
+    navigation.navigate('Analyze');
   }, [navigation]);
-
-  const closeMeetingProcess = useCallback(() => {
-    setShowMeetingProcess(false);
-  }, []);
-
-  const openMeetingProcess = useCallback(() => {
-    setShowMeetingProcess(true);
-  }, []);
-
-  if (showMeetingProcess) {
-    return (
-      <MeetingProcess
-        onBack={closeMeetingProcess}
-        style={styles.meetingProcessOverlay}
-      />
-    );
-  }
 
   return (
     <View style={[styles.container, { width: screenWidth }]}>
@@ -880,6 +820,7 @@ export default function Home() {
           },
         ]}
       >
+        <InAppAlertBanner notifications={priceAlerts.notifications} onDismissAll={priceAlerts.dismissAll} width={warningWidth} />
         <View
           accessibilityLabel={marketWarningText}
           style={[
@@ -904,8 +845,8 @@ export default function Home() {
               styles.marketWarningText,
               {
                 marginLeft: Math.max(8, warningWidth * 0.018),
-                fontSize: Math.max(12, Math.min(18, warningWidth * (18 / 631))),
-                lineHeight: Math.max(17, Math.min(24, warningWidth * (24 / 631))),
+                fontSize: Math.max(11, Math.min(14, warningWidth * (11 / 318))),
+                lineHeight: Math.max(16, Math.min(20, warningWidth * (16 / 318))),
               },
             ]}
           >
@@ -918,13 +859,12 @@ export default function Home() {
             styles.statusRow,
             {
               width: statusRowWidth,
-              height: Math.max(statusHeight, forecastHeight, changeHeight),
-              gap: statusGap,
+              height: statusHeight,
             },
           ]}
         >
           <View
-            accessibilityLabel={`目前市場狀態：${marketStatus.label}`}
+            accessibilityLabel={`目前市場狀態：${dominantRegimeKey ? marketStatus.label : '等待資料'}`}
             style={[
               styles.statusPill,
               {
@@ -940,51 +880,16 @@ export default function Home() {
               adjustsFontSizeToFit
               minimumFontScale={0.72}
             >
-              目前市場狀態
+              {dominantRegimeKey ? '目前市場狀態' : '等待市場資料'}
             </Text>
-            <AssetSvg
+            {dominantRegimeKey ? <AssetSvg
               asset={marketStatus.statusAsset}
               width={statusIconWidth}
               height={statusIconHeight}
               style={styles.statusPillIcon}
               pointerEvents="none"
               accessibilityLabel={`${marketStatus.label}趨勢圖示`}
-            />
-          </View>
-          <View
-            accessibilityLabel={remainingStepsLabel}
-            style={[
-              styles.statusPill,
-              styles.forecastPill,
-              {
-                width: forecastWidth,
-                height: forecastHeight,
-                borderColor: '#D9D9D9',
-              },
-            ]}
-          >
-              <Text style={styles.statusPillText} numberOfLines={1}>
-                {remainingStepsLabel}
-              </Text>
-          </View>
-          <View
-            accessibilityLabel={`市場報酬率：${marketChangeLabel}`}
-            style={[
-              styles.statusPill,
-              styles.changePill,
-              {
-                width: changeWidth,
-                height: changeHeight,
-                borderColor: marketReturnTone.accent,
-              },
-            ]}
-          >
-            <Text
-              style={[styles.statusPillText, { color: marketReturnTone.metricColor }]}
-              numberOfLines={1}
-            >
-              {marketChangeLabel}
-            </Text>
+            /> : null}
           </View>
         </View>
 
@@ -1000,6 +905,7 @@ export default function Home() {
         >
           <SummaryMetric
             label="預估剩餘"
+            speechBubble
             value={durationValue}
             unit={durationUnit}
             accent={marketStatus.borderColor || marketStatus.accent}
@@ -1018,7 +924,7 @@ export default function Home() {
             backgroundColor={marketStatus.metricBackgroundColor}
             textScale={summaryReferenceScale}
             borderRadius={summaryBorderRadius}
-            borderWidth={summaryBorderWidth}
+            borderWidth={0}
             horizontalPadding={summaryHorizontalPadding}
           />
           <SummaryMetric
@@ -1029,7 +935,7 @@ export default function Home() {
             backgroundColor={marketStatus.metricBackgroundColor}
             textScale={summaryReferenceScale}
             borderRadius={summaryBorderRadius}
-            borderWidth={summaryBorderWidth}
+            borderWidth={0}
             horizontalPadding={summaryHorizontalPadding}
           />
         </View>
@@ -1039,13 +945,7 @@ export default function Home() {
             styles.marketStage,
             {
               width: screenWidth,
-              height:
-                marketAnimalMarginTop +
-                marketAnimalHeight +
-                probabilityGap +
-                probabilityPanelHeight +
-                agentGap +
-                agentHeight,
+
             },
           ]}
         >
@@ -1069,7 +969,7 @@ export default function Home() {
                 height={marketAnimalImageHeight}
                 pointerEvents="none"
                 style={
-                  isWideMarketAnimal || cropBullAnimal
+                  isWideMarketAnimal
                     ? {
                         position: 'absolute',
                         top: marketAnimalImageTop,
@@ -1092,10 +992,44 @@ export default function Home() {
               ]}
             >
               <Text style={styles.marketAnimalPlaceholderText}>
-                等待後端市場機率
+                {modelStatusMessage}
               </Text>
+              {!investmentRunPending && !investmentLoading ? (
+                <Pressable accessibilityRole="button" accessibilityLabel="重新讀取模型結果"
+                  onPress={() => setInvestmentRetry((current) => current + 1)}
+                  style={{ padding: 12 }}>
+                  <Text style={{ color: '#D9D9D9', textDecorationLine: 'underline' }}>重新讀取</Text>
+                </Pressable>
+              ) : null}
             </View>
           )}
+
+          <View style={{ width: summaryWidth, alignItems: 'flex-end', marginTop: changeMarginTop }}>
+            <View
+              accessibilityLabel={`加權指數較前一交易日漲跌幅：${marketChangeLabel}，資料日期：${marketDataDate || '未知'}`}
+              style={[
+                styles.statusPill,
+                styles.changePill,
+                {
+                  width: changeWidth,
+                  height: changeHeight,
+                  borderColor: marketReturnTone.accent,
+                },
+              ]}
+            >
+              <Text
+                style={[styles.statusPillText, { color: marketReturnTone.metricColor }]}
+                numberOfLines={1}
+              >
+                {marketChangeLabel}
+              </Text>
+            </View>
+            {marketDataDate ? (
+              <Text style={{ color: '#BDBDBD', fontSize: 11, lineHeight: 16, marginTop: 4 }}>
+                行情 {marketDataDate}・較前一交易日
+              </Text>
+            ) : null}
+          </View>
 
           <ProbabilityBars
             probabilities={orderedRegimeProbabilities}
@@ -1113,37 +1047,9 @@ export default function Home() {
             valueLineHeight={probabilityValueLineHeight}
           />
 
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Agent"
-            onPress={openMeetingProcess}
-            style={[
-              styles.agentButton,
-              {
-                left: (screenWidth - agentWidth) / 2,
-                top: agentStageTop,
-              },
-            ]}
-          >
-            <AssetSvg
-              asset={AGENT_IMAGE}
-              width={agentWidth}
-              height={agentHeight}
-            />
-          </Pressable>
         </View>
 
-        {actionWindowEnabled ? (
-          <AssetSvg
-            asset={ACTION_WINDOW_IMAGE}
-            width={actionWidth}
-            height={actionHeight}
-            style={{
-              marginTop: Math.max(22, screenWidth * 0.055),
-            }}
-            accessibilityLabel="行動窗口開啟"
-          />
-        ) : null}
+
 
         <View
           style={[
@@ -1235,7 +1141,7 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   gridBackground: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#2E2F2E',
   },
   gridVerticalLine: {
@@ -1274,14 +1180,12 @@ const styles = StyleSheet.create({
   marketWarningText: {
     flex: 1,
     color: '#F0F0F0',
-    fontFamily: 'Goldman',
     fontWeight: '400',
   },
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+    justifyContent: 'center',
     marginTop: 14,
   },
   statusPill: {
@@ -1293,9 +1197,6 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     paddingHorizontal: 6,
     overflow: 'hidden',
-  },
-  forecastPill: {
-    paddingHorizontal: 8,
   },
   changePill: {
     paddingHorizontal: 6,
@@ -1326,7 +1227,6 @@ const styles = StyleSheet.create({
   },
   summaryMetricLabel: {
     alignSelf: 'stretch',
-    fontFamily: 'Goldman',
     textAlign: 'left',
   },
   summaryMetricValue: {
@@ -1338,7 +1238,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   summaryMetricUnit: {
-    fontFamily: 'Goldman',
     fontWeight: '400',
   },
   marketStage: {
@@ -1353,6 +1252,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#202120',
     borderRadius: 10,
   },
+  probabilityTitle: {
+    height: 24,
+    color: '#999999',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
   probabilityRow: {
     width: '100%',
     flexDirection: 'row',
@@ -1360,7 +1266,6 @@ const styles = StyleSheet.create({
   },
   probabilityLabel: {
     width: 46,
-    fontFamily: 'Goldman',
     fontSize: 12,
     lineHeight: 16,
   },
@@ -1515,28 +1420,18 @@ const styles = StyleSheet.create({
   chartImageWrap: {
     width: '100%',
     overflow: 'hidden',
-    backgroundColor: '#F3F3F3',
+    backgroundColor: '#2E2F2E',
     alignItems: 'center',
   },
   homeChartStatus: {
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F4F4F4',
+    backgroundColor: '#2E2F2E',
   },
   homeChartStatusText: {
-    color: '#777777',
+    color: '#B9B9B9',
     fontFamily: 'Goldman',
     fontSize: 13,
-  },
-  agentButton: {
-    position: 'absolute',
-    zIndex: 3,
-    elevation: 3,
-  },
-  meetingProcessOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 300,
-    elevation: 40,
   },
 });

@@ -478,9 +478,9 @@ def main():
             .dropna()
         )
 
-        investor_pool_ok = (
-            classes == {investor_type}
-        )
+        selected_pool = raw_profile.get('stock_pool') or investor_type
+        allowed_classes = {'small', 'normal', 'large'} if selected_pool == 'all' else {selected_pool}
+        investor_pool_ok = bool(classes) and classes.issubset(allowed_classes)
 
     if len(stocks) < MIN_GA_STOCKS:
         raise ValueError(

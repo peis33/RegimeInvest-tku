@@ -145,6 +145,16 @@ def read_pool(path, investor_type):
     return df
 
 
+def read_selected_pool(profile, investor_type):
+    pool = profile.get('stock_pool') or investor_type
+    if pool not in (*POOL_FILES, 'all'):
+        raise ValueError(f'不支援的股票池：{pool}')
+    names = list(POOL_FILES) if pool == 'all' else [pool]
+    frames = [read_pool(POOL_FILES[name], name) for name in names]
+    data = pd.concat(frames, ignore_index=True).drop_duplicates(['ticker', '年月日'])
+    return data, ','.join(POOL_FILES[name].name for name in names)
+
+
 def main():
     print("=" * 120)
     print("MODEL 2 — USER-SCOPED CAUSAL CANDIDATE SELECTION | PRODUCTION")
@@ -154,12 +164,11 @@ def main():
 
     profile, investor_type, selection_mode, requested_ids = read_profile()
 
-    pool_file = POOL_FILES[investor_type]
+    df, pool_name = read_selected_pool(profile, investor_type)
     print(f"\nInvestor type : {investor_type}")
-    print(f"Pool file     : {pool_file.name}")
+    print(f"Pool file     : {pool_name}")
     print(f"Selection mode: {selection_mode}")
 
-    df = read_pool(pool_file, investor_type)
 
     pool_ids = sorted(df["ticker"].astype(str).unique().tolist())
 
@@ -170,7 +179,7 @@ def main():
 
         if not valid_ids:
             raise ValueError(
-                "使用者選擇的股票與該 investor_type 股票池沒有任何交集。"
+                "使用者選擇的股票與所選股票池沒有任何交集，請重新選擇股票。"
             )
 
         df = df[df["ticker"].isin(valid_ids)].copy()
@@ -201,7 +210,7 @@ def main():
         {
             "check_name": "Investor pool restriction applied",
             "status": "PASS",
-            "detail": f"investor_type={investor_type}; pool={pool_file.name}; pool_stocks={len(pool_ids)}",
+            "detail": f"investor_type={investor_type}; pool={pool_name}; pool_stocks={len(pool_ids)}",
         }
     )
 
@@ -252,7 +261,7 @@ def main():
                 "stock_id": combined_id,
                 "ticker": str(ticker),
                 "name": str(latest["name"]),
-                "investor_class": investor_type,
+                "investor_class": str(latest['investor_class']),
                 "decision_date": decision_date.date().isoformat(),
                 "latest_price": float(latest["收盤價(元)"]),
                 "market_cap_million": float(latest["市值(百萬元)"]),
@@ -420,7 +429,7 @@ def main():
             {
                 "decision_date": decision_date.date().isoformat(),
                 "investor_type": investor_type,
-                "pool_file": pool_file.name,
+                "pool_file": pool_name,
                 "selection_mode": selection_mode,
                 "requested_stock_count": len(requested_ids),
                 "valid_frontend_stock_count": len(valid_ids),

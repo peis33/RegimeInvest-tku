@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { Goldman_400Regular } from '@expo-google-fonts/goldman';
@@ -9,12 +9,15 @@ import { View, StyleSheet } from 'react-native';
 
 import Home from './src/app/Home';
 import Analyze from './src/app/Analyze';
+import MeetingProcess from './src/app/MeetingProcess';
 import Setting from './src/app/Setting';
 import Compare from './src/app/Compare';
 import Login from './src/app/Login';
 import TabBar, { TAB_BAR_STYLE } from './src/components/TabBar';
+import LaunchScreen from './src/components/LaunchScreen';
 import { AppSettingsProvider } from './src/context/AppSettingsContext';
-import { runDiscussion, runInvestment } from './src/services/investmentApi';
+import { runDiscussion, runInvestment, fetchLatestInvestment } from './src/services/investmentApi';
+import { reconcileInvestmentResult, stoppedInvestmentResult } from './src/services/investmentState';
 import { ViewportProvider } from './src/hooks/useViewportDimensions';
 
 const SETTING_ICON = require('./src/assets/image/setting.svg');
@@ -86,6 +89,9 @@ function normalizeInvestmentProfile(profile = {}) {
     preferred_stock_class: source.preferred_stock_class || 'auto',
     top_n: topN,
     zipf_s: zipfS,
+    stock_pool: source.stock_pool || null,
+    selection_mode: source.selection_mode || 'all',
+    selected_stock_ids: Array.isArray(source.selected_stock_ids) ? source.selected_stock_ids : [],
     // 保留前端既有欄位名稱，讓登入頁與 Analyze 舊有讀取邏輯也能同步。
     investorType,
     riskPreference,
@@ -97,6 +103,30 @@ function normalizeInvestmentProfile(profile = {}) {
 }
 
 export default function App() {
+  const [launchVisible, setLaunchVisible] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setLaunchVisible(false), 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <View style={styles.appRoot}>
+      <View
+        style={styles.appRoot}
+        pointerEvents={launchVisible ? 'none' : 'auto'}
+        accessibilityElementsHidden={launchVisible}
+        importantForAccessibility={launchVisible ? 'no-hide-descendants' : 'auto'}
+        aria-hidden={launchVisible}
+      >
+        <AppContent />
+      </View>
+      {launchVisible && <LaunchScreen />}
+    </View>
+  );
+}
+
+function AppContent() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loginPreferences, setLoginPreferences] = useState(null);
   const [investmentResult, setInvestmentResult] = useState(null);
@@ -104,12 +134,46 @@ export default function App() {
   const [investmentRunError, setInvestmentRunError] = useState(null);
   const [discussionRunPending, setDiscussionRunPending] = useState(false);
   const [discussionRunError, setDiscussionRunError] = useState(null);
+  const backgroundStatus = investmentResult?.discussion_status?.status;
+  const backgroundRunId = investmentResult?.discussion_status?.run_id;
+  const backgroundPending = ['queued', 'running'].includes(backgroundStatus);
+
+  useEffect(() => {
+    if (!backgroundPending || !backgroundRunId || investmentRunPending) return undefined;
+    let active = true;
+    let timer;
+    const poll = async () => {
+      try {
+        const result = await fetchLatestInvestment();
+        if (!active) return;
+        const reconciled = reconcileInvestmentResult(investmentResult, result);
+        setInvestmentResult(reconciled);
+        if (!['queued', 'running'].includes(reconciled.discussion_status?.status)) return;
+      } catch (error) {
+        if (active && error.code === 'configuration_unavailable') {
+          setInvestmentResult(current => stoppedInvestmentResult(current, error.message));
+          return;
+        }
+        // Transient network errors do not restart the background job.
+      }
+      if (active) timer = setTimeout(poll, 3000);
+    };
+    timer = setTimeout(poll, 3000);
+    return () => { active = false; clearTimeout(timer); };
+  }, [backgroundPending, backgroundRunId, investmentRunPending]);
   const [fontsLoaded] = useFonts({
     Goldman: Goldman_400Regular,
   });
 
   if (!fontsLoaded) {
     return <View style={styles.loadingContainer} />;
+  }
+
+  // Read-only development preview of the saved meeting; no model run is triggered.
+  if (__DEV__ && typeof window !== 'undefined' && new URLSearchParams(window.location?.search || '').get('preview') === 'meeting') {
+    return <SafeAreaProvider><ViewportProvider><AppSettingsProvider>
+      <MeetingProcess onBack={() => { window.location.href = window.location.pathname; }} />
+    </AppSettingsProvider></ViewportProvider></SafeAreaProvider>;
   }
 
   return (
@@ -164,14 +228,14 @@ export default function App() {
               setInvestmentRunPending(false);
             }
           }}
-          discussionRunPending={discussionRunPending}
-          discussionRunError={discussionRunError}
-          startDiscussion={() => {
-            if (discussionRunPending) return;
+          discussionRunPending={discussionRunPending || backgroundPending}
+          discussionRunError={discussionRunError || (['failed', 'superseded', 'not_started'].includes(backgroundStatus) ? investmentResult?.discussion_status?.message : null)}
+          startDiscussion={(options = {}) => {
+            if (discussionRunPending || backgroundPending) return;
 
             setDiscussionRunPending(true);
             setDiscussionRunError(null);
-            runDiscussion()
+            runDiscussion(options)
               .then((result) => {
                 setInvestmentResult(result);
               })
