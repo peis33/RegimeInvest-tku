@@ -6,6 +6,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { View, StyleSheet } from 'react-native';
+import HistoricalDemo from './src/app/HistoricalDemo';
 
 import Home from './src/app/Home';
 import Analyze from './src/app/Analyze';
@@ -103,6 +104,22 @@ function normalizeInvestmentProfile(profile = {}) {
 }
 
 export default function App() {
+  const [historyDemo, setHistoryDemo] = useState(() => typeof window !== 'undefined' &&
+    new URLSearchParams(window.location?.search || '').get('demo') === 'history');
+  const openHistory = (open) => {
+    if(typeof window !== 'undefined' && window.history?.replaceState) {
+      const url = new URL(window.location.href);
+      if(open) url.searchParams.set('demo','history');
+      else {url.searchParams.delete('demo');url.searchParams.delete('case');}
+      window.history.replaceState(null,'',url.toString());
+    }
+    setHistoryDemo(open);
+  };
+  if(historyDemo) return <SafeAreaProvider><HistoricalDemo onBack={()=>openHistory(false)} /></SafeAreaProvider>;
+  return <LiveApp />;
+}
+
+function LiveApp() {
   const [launchVisible, setLaunchVisible] = useState(true);
 
   useEffect(() => {

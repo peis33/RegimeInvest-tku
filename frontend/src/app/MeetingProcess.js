@@ -15,6 +15,7 @@ import { meetingMessages, suggestionRows, shortNumber } from '../services/meetin
 import AssetSvg from '../components/AssetSvg';
 import { fetchLatestInvestment } from '../services/investmentApi';
 import { judgeAllocation } from '../services/judgeAllocation';
+import { judgeConsistencyFailed, JUDGE_CONSISTENCY_FAILURE_MESSAGE } from '../services/judgeConsistency';
 import { reconcileInvestmentResult, stoppedInvestmentResult } from '../services/investmentState';
 import { startMeetingPolling } from '../services/meetingPoller';
 import { useAppSettings } from '../context/AppSettingsContext';
@@ -511,10 +512,11 @@ function RoundChat({
                     const role = { risk_seeking: 'Qwen', risk_averse: 'Mistral', judge: 'Judge' }[p.role] || p.model || '模型';
                     const stage = { preparing: '準備中', generating: '發言中', validating: '驗證中', call_failed: '呼叫失敗，檢查中' }[p.stage] || '處理中';
                     const elapsed = discussionStatus?.started_at ? Math.max(0, Math.floor((Date.now() - new Date(discussionStatus.started_at).getTime()) / 1000)) : Math.floor(p.elapsed_seconds || 0);
-                    return `第 ${p.round}/${p.max_rounds} 輪｜${role} ${stage}${p.retry ? '（重試）' : ''}｜已耗時 ${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒`;
+                    const check = p.role === 'judge' && p.judge_check ? `（配置檢查 ${p.judge_check}/${p.judge_check_total || 2}）` : '';
+                    return `第 ${p.round}/${p.max_rounds} 輪｜${role} ${stage}${check}${p.retry ? '（重試）' : ''}｜已耗時 ${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒`;
                   })()
                   : discussionError || discussionStatus?.status === 'failed'
-                    ? '本次 AI 討論未完成。'
+                    ? (discussionStatus?.failure_code === 'judge_order_inconsistent' ? '本次裁決未通過一致性檢查，原配置保持不變。' : '本次 AI 討論未完成。')
                     : '目前尚未執行 AI 討論。'}
               </Text>
               {!discussionPending ? (
@@ -725,7 +727,8 @@ function InfluenceRow({
 }
 
 function FinalDecisionPanel({ data, layoutScale, width }) {
-  const judge = data?.discussion?.structured_decisions?.judge;
+  const consistencyFailed = judgeConsistencyFailed(data);
+  const judge = consistencyFailed ? null : data?.discussion?.structured_decisions?.judge;
   const allocation = judgeAllocation(judge);
   const adjusted = judge?.judge_numeric_legalization?.applied;
   const stockRows = allocation ? suggestionRows(data, judge, true).filter(row => String(row.code || row.id).toUpperCase() !== 'CASH') : [];
@@ -740,6 +743,8 @@ function FinalDecisionPanel({ data, layoutScale, width }) {
         </View>
       </View>
       <View style={{ paddingHorizontal: 34 * cardScale }}>
+        {consistencyFailed && <Text accessibilityRole="alert" style={{ color: '#F0CB8B', fontSize: 14, lineHeight: 22, marginTop: 12 }}>{JUDGE_CONSISTENCY_FAILURE_MESSAGE}</Text>}
+        {judge?.order_consistency?.passed && <Text style={{ color: '#B8B8B8', fontSize: 12, lineHeight: 19, marginTop: 12 }}>已通過兩次配置一致性檢查，不代表投資判斷或報酬保證正確。</Text>}
         {adjusted && <Text style={{ color: '#F0CB8B', fontSize: 13, lineHeight: 21, marginTop: 12 }}>本次未產生有效裁決：原始建議超出限制。以下僅為舊版系統修正紀錄，不可視為有效建議；原配置保持不變。</Text>}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 38 * cardScale }}>
           {['stock', 'cash'].map(key => <View key={key} style={{ width: '43%', borderWidth: 2, borderColor: '#246B9F', borderRadius: 22 * cardScale, minHeight: 132 * cardScale, paddingVertical: 22 * cardScale, paddingHorizontal: 32 * cardScale, justifyContent: 'center' }}>

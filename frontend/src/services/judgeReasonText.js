@@ -33,7 +33,10 @@ export function judgeReasonText(value) {
     return '風險較高，表現不佳';
   }
   if (!text) return '';
-  if (/despite mediocre\s*[.!。]?$/i.test(text)) return '這項調整的理由尚未完整說明';
+  // An untranslated fragment is not a user-facing explanation.  Returning an
+  // empty value lets the caller use the verified evidence or omit the line,
+  // instead of showing a vague "reason pending" sentence.
+  if (/despite mediocre\s*[.!。]?$/i.test(text)) return '';
   // Allow proper names/acronyms in Chinese prose, but do not silently expose
   // untranslated English sentences as a finished localized explanation.
   if (/[A-Za-z]{2,}(?:[ ,;:-]+[A-Za-z]{2,}){3,}/.test(text)) {

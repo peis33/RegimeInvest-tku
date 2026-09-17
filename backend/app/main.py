@@ -243,7 +243,10 @@ def read_model3_status() -> dict:
         calls = progress.get("calls", [])
         last_error = str(calls[-1].get("error", "")) if calls else ""
         role = {"risk_seeking": "Qwen", "risk_averse": "Mistral", "judge": "Judge"}.get(progress.get("role"), "模型")
-        if "timed out" in last_error.lower() or "timeout" in last_error.lower():
+        if "judge_order_inconsistent" in (progress.get("validation_errors") or []):
+            data["failure_code"] = "judge_order_inconsistent"
+            data["message"] = "本次裁決未通過一致性檢查，兩次配置不同，未採用任何一次結果，原配置保持不變。"
+        elif "timed out" in last_error.lower() or "timeout" in last_error.lower():
             reason = "；前一次建議未通過數值或內容驗證" if progress.get("validation_errors") else ""
             data["message"] = f"{role} 回覆逾時{reason}。本次討論未完成，原配置保持不變，可重新嘗試。"
         elif "Traceback" in data.get("message", ""):
@@ -756,6 +759,75 @@ def metric_for_asset(
     return None if math.isnan(value) else value
 
 
+DISPLAY_REGIMES = {
+    "Bear": "偏空",
+    "Bull": "偏多",
+    "Sideways": "盤整",
+}
+
+
+DISPLAY_RISK_PREFERENCES = {
+    "conservative": "保守型",
+    "neutral": "中性",
+    "aggressive": "積極型",
+}
+
+
+def news_content_text(value: Any) -> str:
+    """只取新聞事件本身，避免把來源、網址與內部證據 ID 顯示給使用者。"""
+    text = str(value or "")
+    match = re.search(
+        r"(?:新聞|news)\s*[：:]\s*(.*?)(?:；來源摘要（非全文）：|；來源=|；日期=|；連結=|$)",
+        text,
+        re.IGNORECASE,
+    )
+    content = (match.group(1) if match else "").replace("Yahoo Finance", "")
+    content = re.sub(r"\s+", " ", content).strip()
+    if not content:
+        return ""
+    return f"{content[:88]}{'…' if len(content) > 88 else ''}"
+
+
+def clean_display_reason(value: Any) -> str:
+    """Remove model/debug syntax from a reason before it reaches the chat UI."""
+    text = str(value or "").strip()
+    text = re.sub(
+        r"\b(?:NEWS|MTA|REGIME|DURATION|RISK|ER|SCORE|WEIGHT|CONC)_\d+(?:_\d+)*\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\b(?:risk|expected_return|selection_score|fitness_score|final_weight|HHI)\s*[=＝]\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?%?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\bSideways\b", "盤整", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bBull\b", "偏多", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bBear\b", "偏空", text, flags=re.IGNORECASE)
+    text = re.sub(r"這項調整的理由尚待確認|這項調整的理由尚未完整說明|仍需更多資料佐證", "", text)
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[，,]\s*[，,]+", "，", text)
+    return text.strip(" ，,。；;：:")
+
+
+def stock_news_note(
+    decision: dict,
+    catalog: dict,
+    asset: str,
+    rows_by_asset: dict[str, dict],
+) -> str:
+    for evidence_id in decision.get("stock_evidence_ids", {}).get(asset, []):
+        evidence = catalog.get(evidence_id, {})
+        if evidence.get("kind") != "yahoo_news":
+            continue
+        content = news_content_text(evidence.get("text"))
+        if content:
+            return f"{asset_label(asset, rows_by_asset)}的消息面提到「{content}」"
+    return ""
+
+
 def natural_evidence_text(
     evidence_id: str,
     evidence: dict,
@@ -768,11 +840,15 @@ def natural_evidence_text(
     kind = evidence.get("kind")
 
     if evidence_id == "REGIME_1":
+        regime = DISPLAY_REGIMES.get(
+            str(market.get("predicted_regime", "")),
+            "未知",
+        )
         return (
-            f"市場目前處於 {market.get('predicted_regime', '未知')} 狀態，"
-            f"Bear、Bull 與 Sideways 機率分別為 "
+            f"市場目前處於 {regime}狀態，"
+            f"偏空、偏多與盤整機率分別為 "
             f"{safe_float(market.get('prob_Bear')):.2%}、"
-            f"{safe_float(market.get('prob_Bull')):.2%} 以及 "
+            f"{safe_float(market.get('prob_Bull')):.2%}以及 "
             f"{safe_float(market.get('prob_Sideways')):.2%}"
         )
 
@@ -780,13 +856,13 @@ def natural_evidence_text(
         return (
             f"模型預估目前市場狀態約會持續 "
             f"{safe_float(market.get('expected_regime_duration_steps')):.2f} "
-            "個觀察步驟（HMM steps）"
+            "個觀察步驟"
         )
 
     if evidence_id == "MTA_1":
         return (
-            f"模型估計市場轉向 Bear 約需 "
-            f"{safe_float(market.get('mta_to_bear_steps')):.2f} 個觀察步驟（HMM steps）"
+            f"模型估計市場轉弱約需 "
+            f"{safe_float(market.get('mta_to_bear_steps')):.2f} 個觀察步驟"
         )
 
     if evidence_id == "CASH_1":
@@ -796,7 +872,7 @@ def natural_evidence_text(
         return f"前兩大股票的配置比例合計為 {stats['top2']:.2f}%"
 
     if evidence_id == "CONC_2":
-        return f"股票配置的集中度 HHI 為 {stats['hhi']:.4f}"
+        return f"股票配置的集中程度指標為 {stats['hhi']:.4f}"
 
     if kind in {"expected_return", "risk", "selection_score"}:
         asset_id = evidence.get("asset", "")
@@ -815,20 +891,18 @@ def natural_evidence_text(
         value = metric_for_asset(rows_by_asset, asset_id, column)
 
         if value is None:
-            return str(evidence.get("text", evidence_id))
+            return f"{label}的{metric_name}資料未提供"
 
         if kind == "expected_return":
-            value_text = f"{value:.2%}（原始值 {value:.6f}）"
-        else:
-            value_text = f"{value:.6f}"
-
-        rank_text = f"，排名第 {rank}" if rank is not None else ""
-        if kind == "risk" and rank == 1:
-            rank_text = "，目前股票中風險最高"
-        elif kind == "risk" and rank is not None:
-            rank_text = f"，風險排名第 {rank}"
-
-        return f"{label}的{metric_name}為 {value_text}{rank_text}"
+            rank_text = f"排名第 {rank}" if rank is not None else "已列入比較"
+            return f"{label}的模型預估報酬{rank_text}"
+        if kind == "risk":
+            if rank == 1:
+                return f"{label}的波動風險最高"
+            rank_text = f"由高到低排第 {rank}" if rank is not None else "已列入比較"
+            return f"{label}的波動風險{rank_text}"
+        rank_text = f"排名第 {rank}" if rank is not None else "已列入比較"
+        return f"{label}的綜合評分{rank_text}"
 
     if kind == "weight":
         asset_id = evidence.get("asset", "")
@@ -836,7 +910,13 @@ def natural_evidence_text(
         weight = safe_float(row.get("final_weight_percent"))
         return f"{asset_label(asset_id, rows_by_asset)}的原始配置比例為 {weight:.2f}%"
 
-    return str(evidence.get("text", evidence_id))
+    if kind == "yahoo_news":
+        content = news_content_text(evidence.get("text"))
+        if content:
+            return f"{asset_label(evidence.get('asset'), rows_by_asset)}的消息面提到「{content}」"
+        return f"{asset_label(evidence.get('asset'), rows_by_asset)}有一則已核對的消息"
+
+    return "已核對的資料"
 
 
 def natural_direction_text(
@@ -874,19 +954,55 @@ def natural_claims_text(
 
 
 def verified_stock_facts_text(decision: dict) -> str:
-    """Render program-supplied facts separately from model interpretation."""
-    facts=decision.get('stock_facts')
-    if not isinstance(facts,dict) or not facts:return ''
-    labels={'expected_return':'預期報酬','risk':'風險','selection_score':'選股分數'}
-    lines=['逐股事實表（依資料計算／整理，非模型敘述）：']
-    for asset,row in facts.items():
-        parts=[f"{asset}｜原配置 {row['base_weight_percent']:g}%"]
-        for kind,label in labels.items():
-            metric=row.get('metrics',{}).get(kind)
-            if metric:parts.append(f"{label}：{metric['text']} [{metric['evidence_id']}]")
-        lines.append('；'.join(parts))
-    lines.append('以下增減為判斷性建議，未證明為最佳比例；模型理由需另行檢視。')
-    return '\n'.join(lines)
+    """Render a short, user-facing fact summary without internal IDs."""
+    facts = decision.get("stock_facts")
+    if not isinstance(facts, dict) or not facts:
+        return ""
+    lines = ["逐股資料摘要："]
+    metric_labels = {
+        "expected_return": "預期報酬",
+        "risk": "波動風險",
+        "selection_score": "綜合評分",
+    }
+
+    def extract_rank(raw):
+        for marker in ("排名第", "風險第"):
+            start = raw.find(marker)
+            if start < 0:
+                continue
+            digits = ""
+            for char in raw[start + len(marker):]:
+                if char.isdigit():
+                    digits += char
+                elif digits:
+                    break
+            if digits:
+                return digits
+        return None
+
+    for asset, row in facts.items():
+        if not isinstance(row, dict):
+            continue
+        try:
+            base = float(row.get("base_weight_percent", 0))
+        except (TypeError, ValueError):
+            base = 0.0
+        parts = [f"{asset}原配置 {base:g}%"]
+        for kind, label in metric_labels.items():
+            metric = row.get("metrics", {}).get(kind)
+            if not isinstance(metric, dict):
+                continue
+            raw = str(metric.get("text", ""))
+            rank = extract_rank(raw)
+            if kind == "risk" and rank == "1":
+                parts.append("波動風險最高")
+            elif rank:
+                parts.append(f"{label}排名第{rank}")
+            else:
+                parts.append(f"{label}已列入比較")
+        lines.append("，".join(parts) + "。")
+    lines.append("以上增減為會議的判斷性建議。")
+    return "\n".join(lines)
 
 
 def natural_proposal_text(decision: dict) -> str:
@@ -967,29 +1083,37 @@ def build_agent_message(
             ("現金配置留待 Judge 整合，" if decision.get("proposal_scope") == "individual_stock_suggestions" else f"現金方向為{ACTION_DISPLAY.get(cash_action, cash_action)}，") +
             f"整體立場是「{display['stance']}」。"
         ),
-        (
-            f"為支持這項判斷，它引用了以下資料："
-            f"{join_chinese(evidence_sentences)}。"
-        ),
-        (
-            f"在各部位的配置方向上，它建議："
-            f"{natural_direction_text(decision.get('directions', {}), rows_by_asset)}。"
-        ),
     ]
-    fact_text=verified_stock_facts_text(decision)
-    if fact_text:paragraphs.append(fact_text)
-    if decision.get("weight_change_reasons"):
-        paragraphs.append("逐資產增減理由：" + "；".join(f"{asset_label(a, rows_by_asset)}：{reason}" for a, reason in decision["weight_change_reasons"].items()))
-    if decision.get("selection_reason"):
-        paragraphs.append("增減建議理由：" + decision["selection_reason"])
+    if evidence_sentences:
+        paragraphs.append(f"它參考的資料包括：{join_chinese(evidence_sentences)}。")
+
+    deltas = decision.get("weight_changes_pp", {})
+    reasons = decision.get("weight_change_reasons", {})
+    display_reasons = decision.get("display_reason", {})
+    changed_rows = [
+        (normalize_asset_id(asset), safe_float(delta))
+        for asset, delta in deltas.items()
+        if normalize_asset_id(asset).upper() != "CASH" and abs(safe_float(delta)) > 0.005
+    ]
+    if changed_rows:
+        for asset, delta in changed_rows:
+            action = "增加" if delta > 0 else "減少"
+            reason = clean_display_reason(
+                display_reasons.get(asset)
+                or reasons.get(asset)
+                or decision.get("llm_weight_change_reasons", {}).get(asset)
+            )
+            news_note = stock_news_note(decision, catalog, asset, rows_by_asset)
+            if round_number == 1 and news_note:
+                reason = news_note
+            paragraphs.append(
+                f"{asset_label(asset, rows_by_asset)}建議{action}{abs(delta):g}個百分點，"
+                f"理由是{reason or '依本輪整理的資料'}。"
+            )
+    else:
+        paragraphs.append("本輪沒有股票調整建議。")
     if decision.get("allocation_source") == "program_baseline_fallback":
         paragraphs = ["本輪模型未產生有效選擇，以下為程式基準配置備援，不代表模型主張，也不計入共識。"]
-    proposal_text = natural_proposal_text(decision)
-    if proposal_text:
-        paragraphs.append(
-            f"逐股調整建議（尚未整合資金配置）：{proposal_text}。"
-            "這些數值為判斷性建議，未證明為最佳比例；Model 2 原始配置仍保留。"
-        )
 
     accepted_text = ""
     rebutted_text = ""
@@ -998,22 +1122,24 @@ def build_agent_message(
         rebutted_ids = decision.get("rebutted_opponent_claim_ids", [])
         accepted_text = natural_claims_text(accepted_ids, all_claims, rows_by_asset)
         rebutted_text = natural_claims_text(rebutted_ids, all_claims, rows_by_asset)
-        paragraphs.append(
-            f"在回應對方時，它認同對方提出的「{accepted_text}」，"
-            f"但對「{rebutted_text}」提出不同看法。"
-        )
+        if accepted_text == "無":
+            accepted_text = ""
+        if rebutted_text == "無":
+            rebutted_text = ""
+        if accepted_text and rebutted_text:
+            paragraphs.append(f"它認同對方的{accepted_text}，但對{rebutted_text}持不同看法。")
+        elif accepted_text:
+            paragraphs.append(f"它認同對方的{accepted_text}。")
+        elif rebutted_text:
+            paragraphs.append(f"它對{rebutted_text}持不同看法。")
 
     claim_records = {
         claim_id: claim
         for claim_id, claim in all_claims.items()
         if claim_id.startswith(claim_prefix)
     }
-    if claim_records:
-        paragraphs.append(
-            f"本輪形成的配置觀點包括："
-            f"{natural_claims_text(list(claim_records), claim_records, rows_by_asset)}。"
-        )
 
+    proposal_text = natural_proposal_text(decision)
     model_name = discussion.get("models", {}).get(role)
     return {
         "id": key,
@@ -1083,12 +1209,6 @@ def build_judge_message(
         asset_label(asset_id, rows_by_asset)
         for asset_id in decision.get("decrease", [])
     ])
-    claims = discussion.get("claims", {})
-    rejected_claims = natural_claims_text(
-        decision.get("rejected_claim_ids", []),
-        claims,
-        rows_by_asset,
-    )
     winning_side = WINNING_SIDE_DISPLAY.get(
         decision.get("winning_side"),
         "綜合兩方觀點",
@@ -1103,7 +1223,7 @@ def build_judge_message(
         elif len(decision.get("configuration_matches", [])) == 2:
             winning_side = "雙方相同的最終配置"
         elif decision.get("configuration_matches"):
-            winning_side = "Risk-Seeking 最終配置" if decision["configuration_matches"][0] == "risk_seeking" else "Risk-Averse 最終配置"
+            winning_side = "報酬觀點的最終配置" if decision["configuration_matches"][0] == "risk_seeking" else "風險觀點的最終配置"
         elif "equal_mix_final_proposals" in origins:
             winning_side = "雙方最終配置的等權混合"
     proposal_source = decision
@@ -1115,43 +1235,57 @@ def build_judge_message(
     round_count = discussion.get("round_count")
     consensus_status = discussion.get("consensus_status")
     stop_reason = discussion.get("stop_reason")
+    claims = discussion.get("claims", {})
+    rejected_claims = natural_claims_text(
+        decision.get("rejected_claim_ids", []),
+        claims,
+        rows_by_asset,
+    )
     if consensus_status == "consensus":
         discussion_status_text = f"已在第 {round_count} 輪達成共識"
     elif round_count:
-        discussion_status_text = (
-            f"已完成 {round_count} 輪，仍未完全收斂；已產生最佳努力綜合建議"
-        )
+        discussion_status_text = f"已完成 {round_count} 輪，雙方仍有不同看法，已產生綜合建議"
     else:
         discussion_status_text = "已產生綜合建議"
 
+    adjustment_parts = []
+    if increase != "無":
+        adjustment_parts.append(f"提高{increase}")
+    if decrease != "無":
+        adjustment_parts.append(f"降低{decrease}")
+    adjustment_text = "，".join(adjustment_parts) if adjustment_parts else "股票配置維持不變"
     text_parts = [
-        f"Llama Judge 綜合兩個模型的意見後，認為本次分析「{decision.get('evaluation', '未提供')}」，"
-        f"配置處置為「{decision.get('action', '未提供')}」。"
-        f"它建議相對提高 {increase}，降低 {decrease}；"
-        f"最後較採納{winning_side}。\n"
-        f"討論狀態：{discussion_status_text}（{stop_reason or '完成'}）。\n\n",
+        f"Judge 綜合兩個 Agent 的意見後，認為本次分析「{decision.get('evaluation', '未提供')}」，"
+        f"配置處置為「{decision.get('action', '未提供')}」，{adjustment_text}，"
+        f"最後採納{winning_side}。\n"
+        f"討論狀態：{discussion_status_text}。\n\n",
     ]
-    fact_text=verified_stock_facts_text(decision)
-    if fact_text:text_parts.append(fact_text+"\n\n")
-    if decision.get("weight_change_reasons"):
-        text_parts.append("逐資產增減理由：" + "；".join(f"{asset_label(a, rows_by_asset)}：{reason}" for a, reason in decision["weight_change_reasons"].items()) + "。\n")
-    if decision.get("selection_reason"):
-        text_parts.append("增減建議理由：" + decision["selection_reason"] + "。\n\n")
+    changed_reasons = []
+    for asset, delta in decision.get("weight_changes_pp", {}).items():
+        if normalize_asset_id(asset).upper() == "CASH" or abs(safe_float(delta)) <= 0.005:
+            continue
+        reason = clean_display_reason(
+            decision.get("weight_change_reasons", {}).get(asset)
+            or decision.get("display_reason", {}).get(asset)
+            or decision.get("llm_weight_change_reasons", {}).get(asset)
+        )
+        if reason:
+            changed_reasons.append(f"{asset_label(asset, rows_by_asset)}：{reason}。")
+    if changed_reasons:
+        text_parts.append("逐股調整理由：\n" + "\n".join(changed_reasons) + "\n")
     if decision.get("judge_fallback"):
         text_parts[0] = "Judge未產生有效選擇，使用程式基準配置備援；此結果不代表模型成功裁決。\n"
     if proposal_text:
         text_parts.append(f"建議增減幅度：{proposal_text}。\n\n")
-    text_parts.extend([
-        f"Judge 參考的資料包括：{join_chinese(evidence_sentences)}。",
-        f"未採納的觀點包括：{rejected_claims}。\n\n",
-        "Model 2 原配置不變；Model 3 為未套用的建議增減幅度，不代表可整套執行。",
-    ])
+    if evidence_sentences:
+        text_parts.append(f"Judge 綜合參考：{join_chinese(evidence_sentences)}。\n")
+    text_parts.append("以上是會議提出的參考建議，原始配置尚未被直接改寫。")
     text = "".join(text_parts)
 
     return {
         "id": "judge",
         "type": "judge",
-        "speaker": "Llama Judge",
+        "speaker": "Judge",
         "model": discussion.get("models", {}).get("judge"),
         "role": "judge",
         "round": 0,
@@ -1169,8 +1303,8 @@ def build_judge_message(
             "proposal": proposal_text,
             "round_count": round_count,
             "consensus_status": consensus_status,
-            "stop_reason": stop_reason,
-            "rejected_claims": rejected_claims,
+            "stop_reason": discussion_status_text,
+            "rejected_claims": "",
         },
         "claims": {
             claim_id: claims.get(claim_id)
@@ -1198,24 +1332,25 @@ def build_discussion_messages(
         return []
 
     probability_text = (
-        f"Bear {safe_float(market.get('prob_Bear')):.2%}、"
-        f"Bull {safe_float(market.get('prob_Bull')):.2%}、"
-        f"Sideways {safe_float(market.get('prob_Sideways')):.2%}"
+        f"偏空 {safe_float(market.get('prob_Bear')):.2%}、"
+        f"偏多 {safe_float(market.get('prob_Bull')):.2%}、"
+        f"盤整 {safe_float(market.get('prob_Sideways')):.2%}"
     )
     profile_text = ""
     if profile:
         budget = safe_float(profile.get("budget"))
         risk = profile.get("risk_preference")
         if budget > 0 and risk:
-            profile_text = f"本次投資金額為 {budget:,.0f} 元，風險偏好為 {risk}。"
+            risk_text = DISPLAY_RISK_PREFERENCES.get(str(risk), str(risk))
+            profile_text = f"本次投資金額為 {budget:,.0f} 元，風險偏好為 {risk_text}。"
 
     stats = portfolio_stats(portfolio_rows)
     intro_text = (
         f"本次投資會議針對 {market.get('target_month', '目前月份')} 的配置進行討論。"
-        f"市場目前預測為 {market.get('predicted_regime', '未知')}，"
-        f"Bear、Bull 與 Sideways 機率為 {probability_text}。"
+        f"市場目前預測為 {DISPLAY_REGIMES.get(str(market.get('predicted_regime')), '未知')}，"
+        f"三種市場狀態機率為 {probability_text}。"
         f"目前現金配置約為 {stats['cash']:.2f}%。"
-        f"{profile_text}接下來由 Qwen 與 Mistral 分別提出觀點，再由 Llama Judge 做最後評估。"
+        f"{profile_text}接下來由 Qwen 與 Mistral 分別提出觀點，再由 Judge 做最後評估。"
     )
     messages = [{
         "id": "moderator_intro",
@@ -1744,6 +1879,9 @@ def queue_discussion(profile_data: dict, force: bool = False) -> dict:
                         cwd=str(base), env={**os.environ, "PYTHONUTF8": "1",
                             "MODEL3_MAX_ROUNDS": "2", "MODEL3_CALL_TIMEOUT": "120",
                             "MODEL3_TRANSPORT_ATTEMPTS": "1",
+                            # Production news comes from each holding's Yahoo
+                            # Taiwan stock news page; the cache keeps replays fast.
+                            "MODEL3_AGENT_NEWS_SEARCH": "0",
                             "MODEL3_CACHE_DIR": str(BACKEND_DIR / 'data' / 'discussion_cache'),
                             "MODEL3_FORCE_REFRESH": '1' if force else '0',
                             "MODEL3_PROGRESS_FILE": str(progress_dir / f"{run_id}.json")},
