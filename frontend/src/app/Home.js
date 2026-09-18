@@ -260,14 +260,14 @@ function ProbabilityBars({
 }
 
 function formatDuration(market) {
-  const months = toFiniteNumber(market?.expected_regime_duration_months);
-  if (months !== null && months > 0) {
-    const weeks = months * 4.345;
-    const lower = Math.max(1, Math.floor(weeks));
-    const upper = Math.max(lower, Math.ceil(weeks));
+  const remaining = toFiniteNumber(market?.remaining_regime_trading_days);
+  if (remaining !== null && remaining >= 0) {
+    if (remaining < 5) return '少於1週';
+    const weeks = remaining / 5;
+    const lower = Math.floor(weeks);
+    const upper = Math.ceil(weeks);
     return lower === upper ? `${lower}週` : `${lower}-${upper}週`;
   }
-
   return '--';
 }
 
@@ -345,6 +345,7 @@ function getMarketReturnTone(returnPercent) {
 
 function SummaryMetric({
   label,
+  elapsed,
   value,
   unit,
   accent,
@@ -376,13 +377,21 @@ function SummaryMetric({
             stroke={accent} strokeWidth={2} strokeLinejoin="round" />
         </Svg>
       ) : null}
+      {elapsed !== undefined ? (
+        <View style={{ width: '100%' }}>
+          <Text style={{ color: valueColor || accent, fontSize: 12 * textScale, paddingHorizontal: horizontalPadding }}>已持續</Text>
+          <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.summaryMetricValue, { color: valueColor || accent, fontSize: 30 * textScale, lineHeight: 33 * textScale }]}>
+            {elapsed}<Text style={{ fontSize: 14 * textScale }}>{elapsed === '待確認' ? '' : '週'}</Text>
+          </Text>
+        </View>
+      ) : null}
       <Text
         style={[
           styles.summaryMetricLabel,
           {
             color: valueColor || accent,
-            fontSize: 16 * textScale,
-            lineHeight: 19 * textScale,
+            fontSize: (elapsed !== undefined ? 12 : 16) * textScale,
+            lineHeight: (elapsed !== undefined ? 15 : 19) * textScale,
             paddingHorizontal: horizontalPadding,
           },
         ]}
@@ -395,8 +404,8 @@ function SummaryMetric({
           styles.summaryMetricValue,
           {
             color: valueColor || accent,
-            fontSize: 38 * textScale,
-            lineHeight: 42 * textScale,
+            fontSize: (elapsed !== undefined ? 30 : 38) * textScale,
+            lineHeight: (elapsed !== undefined ? 33 : 42) * textScale,
           },
         ]}
         numberOfLines={1}
@@ -905,6 +914,9 @@ export default function Home() {
         >
           <SummaryMetric
             label="預估剩餘"
+            elapsed={toFiniteNumber(market?.elapsed_regime_trading_days) === null
+              ? '待確認'
+              : String(Math.round(Number(market.elapsed_regime_trading_days) / 5 * 10) / 10)}
             speechBubble
             value={durationValue}
             unit={durationUnit}

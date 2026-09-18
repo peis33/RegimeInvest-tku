@@ -1232,6 +1232,27 @@ def build_app_duration_metrics(
     }
 
 
+def build_app_timing_metrics(timing_daily, predicted_regime, p_stay):
+    current_regime = str(timing_daily.iloc[-1]["regime"])
+    elapsed_days = 0
+    for regime in reversed(timing_daily["regime"].tolist()):
+        if regime != current_regime:
+            break
+        elapsed_days += 1
+    # Geometric holding times are memoryless: expected future observations
+    # after today are Pii/(1-Pii), not total expectation minus elapsed days.
+    p_stay = float(p_stay)
+    timing_metrics = {
+        "timing_as_of": str(timing_daily.iloc[-1]["date"].date()),
+        "observed_regime": current_regime,
+        "elapsed_regime_trading_days": elapsed_days if current_regime == predicted_regime else None,
+        "remaining_regime_trading_days": p_stay / (1 - p_stay) if current_regime == predicted_regime and 0 <= p_stay < 1 else None,
+        "timing_method": "CAUSAL_HMM_RUN_AND_GEOMETRIC_REMAINING",
+    }
+
+    return timing_metrics
+
+
 def main():
     print("=" * 120)
     print("MODEL 1 V5 - HMM + MTA + LSTM | FROZEN STRICT CAUSAL PRODUCTION")
@@ -1544,9 +1565,20 @@ def main():
         predicted_regime=predicted_regime,
     )
 
+    # App-only timing: extend the frozen causal filter through the latest data.
+    # This does not alter the monthly prediction or its training inputs.
+    timing_daily = v4.filter_frozen_hmm_segment(
+        feat, hmm_model, hmm_scaler, hmm_features, mapping, mta,
+        sorted(feat.loc[feat["year_month"] >= train_months[0], "year_month"].unique()),
+    ).sort_values("date")
+    timing_metrics = build_app_timing_metrics(
+        timing_daily, predicted_regime, app_metrics["regime_self_transition_prob"],
+    )
+
     result = pd.DataFrame(
         [{
             "target_month": str(target_month),
+            **timing_metrics,
             "predicted_regime": predicted_regime,
             "prob_Bear": float(
                 probabilities[

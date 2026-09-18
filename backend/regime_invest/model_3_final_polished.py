@@ -74,6 +74,11 @@ MAX_ADVISORY_DELTA_PP = 10.0  # hard cap vs Model 2: each stock may move at most
 NEWS_COUNT_PER_ASSET = 5
 NEWS_LOOKBACK_DAYS = 7
 MAX_NEWS_ITEMS = 30
+NEWS_PAGE_MARKER_RE = re.compile(
+    r'(?:Yahoo\s+台股個股新聞頁|台股個股新聞頁|'
+    r'Yahoo(?:\s+Finance)?\s+新聞|新聞)\s*[：:]\s*',
+    flags=re.I,
+)
 
 CALL_TIMEOUT = float(os.getenv("MODEL3_CALL_TIMEOUT", "180"))
 # Keep repeated structured calls reproducible without changing the selected
@@ -2556,6 +2561,14 @@ def _news_reasoning_signal(headline):
     # automatically an operating benefit for the company whose shares were
     # bought.  Do not label "取得廣達420張" as a positive business signal.
     text = re.sub(r'取得[^，,；;。]{0,24}(?:張|股|股份|股票)', '', text)
+    # "風險評估／管理／治理" is a governance topic, not by itself a
+    # negative market event. Keep standalone signals such as "風險最高"
+    # and "風險升高" intact.
+    text = re.sub(
+        r'(?:自然相關|自然|金融|市場|營運|企業)?風險'
+        r'(?:評估|管理|治理|指南|方法學|辨識|課題|議題|政策|工作平台|工作群)',
+        '', text,
+    )
     positive_terms = (
         '成長', '增加', '上升', '買進', '買超', '擴產', '啟用', '訂單',
         '需求', '獲利', '招募', '布局', '穩定', '支撐', '利多', '改善',
@@ -3106,8 +3119,9 @@ def _news_first_adjustment_errors(obj, role, baseline, catalog, round_no):
 def _news_headline_text(fact):
     """Return the provider headline/summary portion used for grounding."""
     text = str((fact or {}).get('text', ''))
-    if '新聞：' in text:
-        text = text.split('新聞：', 1)[1]
+    marker = NEWS_PAGE_MARKER_RE.search(text)
+    if marker:
+        text = text[marker.end():]
     if '；來源摘要' in text:
         text = text.split('；來源摘要', 1)[0]
     if '；來源=' in text:
@@ -4623,10 +4637,11 @@ def _request_delta_decision(role, model, prompt, baseline, catalog, claims, roun
                         '至少一個陣列非空；依證據自行決定接受或反駁，不可兩邊都空或重複同一 ID。合法 ID：'
                         + json.dumps(list(claims), ensure_ascii=False))
         request+=_stock_fact_guidance(baseline,catalog)
+        news_first_enabled = os.getenv('MODEL3_NEWS_FIRST_REQUIRED', '1') == '1'
         request+=_stock_evidence_guidance(
             baseline, catalog, initial if attempt else (),
-            news_first=(role != 'judge' and round_no == 1))
-        if role != 'judge' and round_no == 1:
+            news_first=(news_first_enabled and role != 'judge' and round_no == 1))
+        if news_first_enabled and role != 'judge' and round_no == 1:
             request+='\n第一輪精簡要求：每股只在weight_change_reasons寫一份60字內短理由，整合證據內容、方向與幅度取捨，引用1至3項證據放stock_evidence_ids，不複製新聞全文；'
             request+='有新聞的股票必須填news_reasoning，選擇evidence_id並填supports；supports必須與增減數字方向一致。fact與impact若填寫只能來自該則新聞，程式會依新聞原文校正畫面說明，不要創造新聞或內部欄位；'
             request+='若新聞本身偏利空卻要增加，或偏利多卻要減少，仍須由你的增減判斷承擔取捨，完整輸出所有必填欄位並閉合JSON。'
@@ -4706,7 +4721,7 @@ def _request_delta_decision(role, model, prompt, baseline, catalog, claims, roun
         errors=cash_errors or _validate_delta_decision(
             obj,role,baseline,catalog,claims,round_no,final_pair,
             structured_reasons=structured_reasons,
-            require_news_for_adjustment=(structured_reasons and role != 'judge' and round_no == 1))
+            require_news_for_adjustment=(structured_reasons and news_first_enabled and role != 'judge' and round_no == 1))
         if round2_policy and isinstance(obj, dict):
             errors += _round_two_policy_errors(obj, round2_policy)
             if role != 'judge':
@@ -5055,6 +5070,11 @@ class ModelDecisionError(RuntimeError):
 def _display_clean_text(value, limit=44):
     """Make one evidence fact safe for the user-facing Chinese transcript."""
     text = re.sub(r'https?://\S+', '', str(value or ''))
+    # ADR is a meaningful part of a price headline (the USD move is not the
+    # same thing as the Taiwan-listed share price). Preserve this one acronym
+    # while removing other provider/model jargon below.
+    adr_marker = '\ue000'
+    text = re.sub(r'(?<![A-Za-z])ADR(?=\b|\d)', adr_marker, text, flags=re.I)
     text = re.sub(r'\b(?:Yahoo(?:\s+Finance)?|HMM|steps?|Python|LLM)\b', '', text, flags=re.I)
     text = re.sub(r'\b(?:risk|expected_return|selection_score|final_weight|HHI)\s*[=＝]\s*[+-]?[\d.]+', '', text, flags=re.I)
     text = re.sub(r'[A-Za-z][A-Za-z0-9_.-]*', '', text)
@@ -5062,6 +5082,7 @@ def _display_clean_text(value, limit=44):
     text = re.sub(r'[；;]+', '，', text)
     text = re.sub(r'\s+', '', text)
     text = re.sub(r'[，,。]{2,}', '，', text)
+    text = text.replace(adr_marker, 'ADR')
     text = text.strip(' ，,。:：')
     if len(text) > limit:
         text = text[:limit].rstrip('，,。') + '…'
@@ -5070,10 +5091,7 @@ def _display_clean_text(value, limit=44):
 
 def _catalog_news_payload(text):
     """Extract provider content after either supported news-page label."""
-    marker = re.search(
-        r'(?:Yahoo\s+台股個股新聞頁|Yahoo(?:\s+Finance)?\s+新聞|新聞)\s*[：:]\s*',
-        str(text or ''), flags=re.I,
-    )
+    marker = NEWS_PAGE_MARKER_RE.search(str(text or ''))
     if not marker:
         return ''
     return (str(text)[marker.end():]
@@ -5172,6 +5190,40 @@ def _display_stock_label(asset, catalog):
             if name:
                 return name
     return _display_clean_text(asset, 16) or '該股票'
+
+
+def _display_news_fact(asset, value, catalog=None, evidence_id=None):
+    """Normalize a news fact before placing it in a stock-specific sentence."""
+    fact = ''
+    if isinstance(catalog, dict) and evidence_id:
+        evidence = catalog.get(evidence_id)
+        if isinstance(evidence, dict) and evidence.get('kind') == 'yahoo_news':
+            # Prefer the frozen provider headline over a model paraphrase. It
+            # prevents a concise but misleading phrase such as "日上漲美元"
+            # from losing the fact that the USD move belongs to the ADR.
+            fact = _catalog_news_title(evidence.get('text', ''))
+    if not fact:
+        fact = _news_headline_text({'text': value})
+    # Some model responses echo the stock code/name even though the stock is
+    # already identified by the surrounding sentence.  Keep the readable
+    # name, but remove the redundant leading code.
+    fact = re.sub(r'^\s*' + re.escape(str(asset)) + r'\s*', '', fact, count=1)
+    label = _display_stock_label(asset, catalog) if isinstance(catalog, dict) else ''
+    if label and label != str(asset):
+        fact = re.sub(
+            r'^\s*' + re.escape(label) + r'\s*' + re.escape(label),
+            label, fact, count=1,
+        )
+        fact = re.sub(
+            r'^\s*' + re.escape(label) + r'\s+', label, fact, count=1,
+        )
+    if ('美元' in fact and '折台股' in fact
+            and not re.search(r'(?<![A-Za-z])ADR(?=\b|\d)', fact, flags=re.I)):
+        fact = re.sub(
+            r'^\s*' + re.escape(label) + r'(?=\S)',
+            f'{label}ADR', fact, count=1,
+        ) if label else f'ADR{fact}'
+    return re.sub(r'\s+', ' ', fact.strip()).rstrip('，,。；;')
 
 
 def _display_stock_labels(assets, catalog, exclude=None, limit=3):
@@ -5283,8 +5335,18 @@ def _display_round_two_reason(asset, delta, revision, catalog, decision=None):
         # schema label itself.  This keeps the transcript specific without
         # repeating the entire first-round paragraph.
         summary = re.sub(
-            r'^(?:接受|採納)對方(?:同股)?主張(?:後)?(?:調整本股配置)?[，,：:]?',
+            r'^(?:接受|採納)對方'
+            r'(?:(?:對|針對)[^，,：:。；;]*?的)?'
+            r'(?:同股)?主張(?:後)?(?:調整本股配置)?[，,：:]?',
             '', summary).strip(' ，,；;。')
+        summary = re.sub(
+            r'維持\s*(增加|減少|增|減)\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*%?',
+            lambda match: (
+                f'將{("增加" if match.group(1) in {"增加", "增"} else "減少")}幅度'
+                f'維持為 {match.group(2)} 個百分點'
+            ),
+            summary,
+        )
         if summary and summary not in {'調整本股配置', '本股調整配置'}:
             return f'{summary}。'
         support = _display_round_two_support(asset, delta, decision, catalog)
@@ -5300,7 +5362,13 @@ def _display_news_reasoning(asset, delta, info, catalog=None, references=None):
     """Render the model's validated news -> impact -> decision bridge."""
     if not isinstance(info, dict):
         return ''
-    fact = re.sub(r'\s+', ' ', str(info.get('fact', '')).strip()).rstrip('，,。；;')
+    # The model may echo the evidence label (for example,
+    # ``2881富邦金台股個股新聞頁：``) in its fact field.  Render only the
+    # provider headline so the stock code/name and page marker are not shown
+    # twice in the meeting transcript.
+    fact = _display_news_fact(
+        asset, info.get('fact', ''), catalog, info.get('evidence_id'),
+    )
     impact = re.sub(r'\s+', ' ', str(info.get('impact', '')).strip()).rstrip('，,。；;')
     # ``supports`` already carries the direction.  Remove an accidental copy
     # of that field from impact so the user sees one concise conclusion.
@@ -5313,20 +5381,22 @@ def _display_news_reasoning(asset, delta, info, catalog=None, references=None):
         return ''
     direction = '增加' if delta > 0 else '減少' if delta < 0 else '維持原配置'
     action = f'{direction}配置' if delta != 0 else direction
+    primary = catalog.get(info.get('evidence_id')) if isinstance(catalog, dict) else None
+    has_positive, has_negative = _news_reasoning_signal(
+        _news_headline_text(primary) if isinstance(primary, dict) else fact,
+    )
+    impact_clause = _display_news_impact_for_headline(
+        impact, has_positive, has_negative,
+    )
     counter = _display_news_counter_fragment(
         asset, delta, info, catalog, references)
     if counter:
-        primary = catalog.get(info.get('evidence_id')) if isinstance(catalog, dict) else None
-        has_positive, has_negative = _news_reasoning_signal(
-            _news_headline_text(primary) if isinstance(primary, dict) else '')
+        counter = _display_news_fragment_without_prefix(counter)
         if delta > 0 and has_negative and not has_positive:
             return f'新聞指出{fact}，呈現負向訊號；但{counter}提供相對支持，因此{action}。'
         if delta < 0 and has_positive and not has_negative:
             return f'新聞指出{fact}，呈現正向訊號；但{counter}顯示仍需控制曝險，因此{action}。'
-        return f'新聞指出{fact}，{_display_news_impact_clause(impact)}；同時{counter}，因此{action}。'
-    primary = catalog.get(info.get('evidence_id')) if isinstance(catalog, dict) else None
-    has_positive, has_negative = _news_reasoning_signal(
-        _news_headline_text(primary) if isinstance(primary, dict) else '')
+        return f'新聞指出{fact}，{impact_clause}；同時{counter}，因此{action}。'
     if delta != 0 and not has_positive and not has_negative:
         expected = 'increase' if delta > 0 else 'decrease'
         selected_facts = _selected_stock_facts(references, catalog, asset)
@@ -5335,7 +5405,9 @@ def _display_news_reasoning(asset, delta, info, catalog=None, references=None):
         primary_fragment = _display_evidence_fragment(primary) \
             if isinstance(primary, dict) else ''
         if counter:
-            counter_fragment = _display_evidence_fragment(counter)
+            counter_fragment = _display_news_fragment_without_prefix(
+                _display_evidence_fragment(counter),
+            )
             if counter_fragment and counter_fragment != primary_fragment:
                 return (f'新聞指出{fact}，該消息未直接反映本股營運方向；同時{counter_fragment}，'
                         f'因此{action}。')
@@ -5344,10 +5416,11 @@ def _display_news_reasoning(asset, delta, info, catalog=None, references=None):
         support = [fragment for fragment in support
                    if fragment != primary_fragment]
         if support:
+            support[0] = _display_news_fragment_without_prefix(support[0])
             return (f'新聞指出{fact}，該消息未直接反映本股營運方向；同時{support[0]}，'
                     f'因此{action}。')
         return f'新聞指出{fact}，該消息未直接反映本股營運方向，引用資料不足以解釋{action}。'
-    return f'新聞指出{fact}，{_display_news_impact_clause(impact)}，因此{action}。'
+    return f'新聞指出{fact}，{impact_clause}，因此{action}。'
 
 
 def _display_news_impact_clause(impact):
@@ -5360,6 +5433,37 @@ def _display_news_impact_clause(impact):
     if text.startswith('新聞訊號'):
         return '訊號' + text[len('新聞訊號'):]
     return '代表' + text
+
+
+def _display_news_impact_for_headline(impact, has_positive, has_negative):
+    """Keep the displayed signal consistent with the cited headline."""
+    if has_positive and not has_negative:
+        normalized = _display_news_impact_clause(impact)
+        return (
+            normalized
+            if '正向' in normalized and '負向' not in normalized
+            else '呈現正向訊號'
+        )
+    if has_negative and not has_positive:
+        normalized = _display_news_impact_clause(impact)
+        return (
+            normalized
+            if '負向' in normalized and '正向' not in normalized
+            else '呈現負向訊號'
+        )
+    if has_positive and has_negative:
+        normalized = _display_news_impact_clause(impact)
+        return (
+            normalized
+            if '正向' in normalized and '負向' in normalized
+            else '正負訊號交雜'
+        )
+    return '該消息未直接反映本股營運方向'
+
+
+def _display_news_fragment_without_prefix(fragment):
+    """Remove a leading news label before joining two news fragments."""
+    return re.sub(r'^新聞(?:提到|指出)\s*', '', str(fragment or '')).strip()
 
 
 def _display_news_counter_fragment(asset, delta, info, catalog, references):
@@ -5408,12 +5512,23 @@ def _display_judge_evidence_reason(asset, delta, references, catalog):
         counter = _news_counter_fact(
             facts, news.get('id'), 'increase' if delta > 0 else 'decrease')
         if counter:
-            counter_fragment = _display_evidence_fragment(counter)
+            counter_fragment = _display_news_fragment_without_prefix(
+                _display_evidence_fragment(counter),
+            )
             if delta > 0 and has_negative and not has_positive:
                 return (f'{news_fragment}，呈現負向訊號，但{counter_fragment}提供相對支持，'
                         f'因此{action}。')
             if delta < 0 and has_positive and not has_negative:
                 return (f'{news_fragment}，呈現正向訊號，但{counter_fragment}顯示仍需控制曝險，'
+                        f'因此{action}。')
+            directional = [
+                fragment for fragment in _display_directional_fragments(
+                    references, catalog, asset, delta, limit=2,
+                ) if not fragment.startswith('新聞提到')
+                and fragment != counter_fragment
+            ]
+            if directional:
+                return (f'{news_fragment}，同時{counter_fragment}，且{directional[0]}，'
                         f'因此{action}。')
             return (f'{news_fragment}，同時{counter_fragment}，因此{action}。')
         # This path should be blocked by first-round evidence validation.  Keep
@@ -6391,7 +6506,7 @@ def _agreement_summary(distance, reasoning_agreed):
     agreed = close and reasoning_agreed
     if identical:
         label = ('建議比例一致，雙方已回應且無未解決反駁' if agreed else
-                 '建議比例一致，但部分對手主張尚未完整回應')
+                 '建議比例一致，但雙方對部分主張的理由仍有不同看法')
     else:
         label = ('建議比例接近，雙方已回應且無未解決反駁' if agreed else
                  '建議比例接近，但理由尚未取得一致' if close else '建議比例仍有差異')

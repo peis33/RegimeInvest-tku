@@ -3,8 +3,17 @@
   "investor_type": "normal",
   "risk_preference": "neutral",
   "allocation_preference": "moderate",
-  "allow_fractional": false,
+  "allow_fractional": true,
   "preferred_stock_class": "auto",
-  "top_n": 2,
-  "zipf_s": 1.2
+  "top_n": 5,
+  "zipf_s": 1.2,
+  "stock_pool": "all",
+  "selection_mode": "custom",
+  "selected_stock_ids": [
+    "2303",
+    "2382",
+    "2603",
+    "2886",
+    "2891"
+  ]
 }

@@ -777,7 +777,9 @@ def news_content_text(value: Any) -> str:
     """只取新聞事件本身，避免把來源、網址與內部證據 ID 顯示給使用者。"""
     text = str(value or "")
     match = re.search(
-        r"(?:新聞|news)\s*[：:]\s*(.*?)(?:；來源摘要（非全文）：|；來源=|；日期=|；連結=|$)",
+        r"(?:Yahoo\s+台股個股新聞頁|台股個股新聞頁|"
+        r"Yahoo(?:\s+Finance)?\s+新聞|新聞|news)\s*[：:]\s*"
+        r"(.*?)(?:；來源摘要（非全文）：|；來源=|；日期=|；連結=|$)",
         text,
         re.IGNORECASE,
     )
@@ -806,6 +808,15 @@ def clean_display_reason(value: Any) -> str:
     text = re.sub(r"\bSideways\b", "盤整", text, flags=re.IGNORECASE)
     text = re.sub(r"\bBull\b", "偏多", text, flags=re.IGNORECASE)
     text = re.sub(r"\bBear\b", "偏空", text, flags=re.IGNORECASE)
+    text = re.sub(r"(同時|並且|而且)新聞(?:提到|指出)\s*", r"\1", text)
+    text = re.sub(
+        r"維持\s*(增加|減少|增|減)\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*%",
+        lambda match: (
+            f"將{'增加' if match.group(1) in {'增加', '增'} else '減少'}幅度"
+            f"維持為 {match.group(2)} 個百分點"
+        ),
+        text,
+    )
     text = re.sub(r"這項調整的理由尚待確認|這項調整的理由尚未完整說明|仍需更多資料佐證", "", text)
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r"[，,]\s*[，,]+", "，", text)
