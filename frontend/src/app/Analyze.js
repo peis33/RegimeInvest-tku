@@ -1193,6 +1193,9 @@ export default function Analyze({ route: incomingRoute }) {
         ? STOCKS.filter((stock) => activeCustomGroup.symbols.includes(stock.symbol))
         : STOCKS;
   const poolKey = { 大戶: 'large', 中間戶: 'normal', 小股民: 'small' }[investorType] || 'all';
+  const expectedInvestorType = ['small', 'normal', 'large'].includes(poolKey)
+    ? poolKey
+    : null;
   const selectedSymbols = baseVisibleStocks.map((stock) => stock.symbol).sort();
   const desiredScope = JSON.stringify([poolKey, selectedSymbols]);
   const currentResult = investmentResult || latestInvestment;
@@ -1200,7 +1203,11 @@ export default function Analyze({ route: incomingRoute }) {
     currentResult?.profile?.stock_pool,
     [...(currentResult?.profile?.selected_stock_ids || [])].sort(),
   ]);
-  const scopeMatches = resultScope === desiredScope;
+  const resultInvestorType = currentResult?.profile?.investor_type
+    ?? currentResult?.profile?.investorType;
+  const identityMatches = expectedInvestorType === null
+    || resultInvestorType === expectedInvestorType;
+  const scopeMatches = resultScope === desiredScope && identityMatches;
 
   useEffect(() => {
     if (!isAnalyzeFocused || !persistentStateReady || investmentRunPending || !rerunInvestment) return;
@@ -1221,6 +1228,9 @@ export default function Analyze({ route: incomingRoute }) {
       stock_pool: stockPool,
       selection_mode: 'custom',
       selected_stock_ids: symbols,
+      ...(stockPool === 'small' || stockPool === 'normal' || stockPool === 'large'
+        ? { investor_type: stockPool }
+        : {}),
     }).catch((error) => {
       if (lastRequestedScope.current === desiredScope) {
         setScopeError(error?.message || '群組配置計算失敗');
