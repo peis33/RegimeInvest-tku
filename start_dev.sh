@@ -18,7 +18,21 @@ for port in 8000 8081; do
   fi
 done
 
-LAN_IP="${REACT_NATIVE_PACKAGER_HOSTNAME:-$(ipconfig getifaddr en0 2>/dev/null || true)}"
+detect_lan_ip() {
+  local default_interface candidate interface
+  default_interface="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
+  for interface in "$default_interface" en0 en1 en2 en3 bridge0; do
+    [[ -n "$interface" ]] || continue
+    candidate="$(ifconfig "$interface" 2>/dev/null | awk '$1 == "inet" && $2 != "127.0.0.1" {print $2; exit}')"
+    if [[ -n "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+LAN_IP="${REACT_NATIVE_PACKAGER_HOSTNAME:-$(detect_lan_ip || true)}"
 [[ -n "$LAN_IP" ]] || { echo "無法取得區域網路 IP。請連上 Wi-Fi，或指定 REACT_NATIVE_PACKAGER_HOSTNAME。"; exit 1; }
 export REACT_NATIVE_PACKAGER_HOSTNAME="$LAN_IP"
 export EXPO_PUBLIC_API_BASE_URL="http://$LAN_IP:8000"

@@ -7,13 +7,18 @@
   "preferred_stock_class": "auto",
   "top_n": 5,
   "zipf_s": 1.2,
-  "stock_pool": "all",
+  "stock_pool": "small",
   "selection_mode": "custom",
   "selected_stock_ids": [
-    "2303",
-    "2382",
-    "2603",
+    "1216",
+    "2002",
+    "2881",
+    "2882",
+    "2884",
     "2886",
-    "2891"
+    "2891",
+    "2892",
+    "4904",
+    "5880"
   ]
 }

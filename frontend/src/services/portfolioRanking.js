@@ -11,7 +11,12 @@ export function sortByRecommendation(rows) {
 }
 export function hasSuggestedPosition(row) {
   const shares = number(row?.shares);
-  if (shares !== null) return shares > 0;
+  // A positive decimal here can be an unexecutable remainder from the
+  // optimizer (for example 0.0193 shares).  Taiwan odd-lot orders still need
+  // at least one whole share, and the UI displays whole-share quantities.
+  if (shares !== null) return Math.floor(shares + 1e-6) >= 1;
   const amount = number(row?.allocated_amount ?? row?.allocatedAmount);
-  return amount !== null && amount > 0;
+  const price = number(row?.price);
+  if (amount === null || amount <= 0) return false;
+  return price === null || price <= 0 ? true : amount + 1e-6 >= price;
 }

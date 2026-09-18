@@ -102,6 +102,17 @@ Agent 收到的是 Model 2 的結果摘要、Model 1 市場資訊、使用者條
 - 即使前端輸入相同，新聞或模型程式更新也可能使快取失效。
 - 失敗或不符合資格的結果不會作為有效快取重用。
 
+## Agent 討論影響測試
+
+`backend/regime_invest/agent_impact_backtest.py` 會將 Model 2 基準配置與 Model 3 Judge 建議配置，在相同歷史起始日、相同持有期間下比較，輸出總報酬、年化波動、最大回撤及 Sharpe 差異：
+
+```bash
+cd RegimeInvest-tku
+.venv/bin/python backend/regime_invest/agent_impact_backtest.py
+```
+
+目前的初步執行是「固定一份已保存建議權重的歷史敏感度回放」，不是把 Agent 在每個歷史日期重新執行，因此不能直接宣稱 Agent 造成某個報酬提升或風險降低百分比。正式因果比較需要在每個歷史決策日保存 Model 2 原始權重、Agent Judge 最終權重、決策日與後續價格，再以相同交易成本和持有規則評估。
+
 本機真實測試中的完整討論曾耗時約 5–9 分鐘。這只是特定環境的測試紀錄，不是效能保證；硬體、輸入長度、模型載入與重試都會影響時間。
 
 ## 開發工具與執行環境

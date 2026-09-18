@@ -61,6 +61,7 @@ PIPELINE_VERSION = "V5_FROZEN_STRICT_CAUSAL_T60_CW_OFF"
 DATA_SOURCE = os.getenv("MODEL1_DATA_SOURCE", "csv").lower()
 CSV_PATH = os.getenv("HISTORY_CSV_PATH", "加權指數2014-2025.csv")
 EXP_START_DATE = os.getenv("EXP_START_DATE", "2016-01-01")
+AS_OF_DATE = os.getenv("MODEL1_AS_OF_DATE", "").strip()
 HISTORY_PRICE_CSV = os.getenv(
     "MODEL1_HISTORY_PRICE_CSV",
     "20140101-20251231加權指數(收盤價).csv",
@@ -589,6 +590,21 @@ def load_csv_mode_data():
         .drop_duplicates(subset=["date"], keep="last")
         .reset_index(drop=True)
     )
+
+    # Historical replay mode: keep only information that was available on
+    # the requested decision date.  The normal production run leaves this
+    # unset and therefore keeps the latest available observation.
+    if AS_OF_DATE:
+        as_of = pd.Timestamp(AS_OF_DATE)
+        combined = combined[combined["date"] <= as_of].copy()
+        if combined.empty:
+            raise ValueError(
+                f"MODEL1_AS_OF_DATE={AS_OF_DATE} 前沒有可用 Model 1 資料。"
+            )
+        print(
+            "CSV as-of filter: "
+            f"{as_of.date()} -> latest={combined['date'].max().date()}"
+        )
 
     print(
         "CSV period: "
@@ -1232,8 +1248,18 @@ def build_app_duration_metrics(
     }
 
 
-def build_app_timing_metrics(timing_daily, predicted_regime, p_stay):
+def build_app_timing_metrics(timing_daily, mapping, hmm_model):
     current_regime = str(timing_daily.iloc[-1]["regime"])
+    regime_to_state = {
+        regime: int(state)
+        for state, regime in mapping.items()
+    }
+    current_state = regime_to_state.get(current_regime)
+    if current_state is None:
+        raise ValueError(
+            f"Current regime {current_regime!r} not found in HMM mapping."
+        )
+
     elapsed_days = 0
     for regime in reversed(timing_daily["regime"].tolist()):
         if regime != current_regime:
@@ -1241,16 +1267,28 @@ def build_app_timing_metrics(timing_daily, predicted_regime, p_stay):
         elapsed_days += 1
     # Geometric holding times are memoryless: expected future observations
     # after today are Pii/(1-Pii), not total expectation minus elapsed days.
-    p_stay = float(p_stay)
+    p_stay = float(hmm_model.transmat_[current_state, current_state])
     timing_metrics = {
         "timing_as_of": str(timing_daily.iloc[-1]["date"].date()),
         "observed_regime": current_regime,
-        "elapsed_regime_trading_days": elapsed_days if current_regime == predicted_regime else None,
-        "remaining_regime_trading_days": p_stay / (1 - p_stay) if current_regime == predicted_regime and 0 <= p_stay < 1 else None,
+        "elapsed_regime_trading_days": elapsed_days,
+        "remaining_regime_trading_days": p_stay / (1 - p_stay) if 0 <= p_stay < 1 else None,
         "timing_method": "CAUSAL_HMM_RUN_AND_GEOMETRIC_REMAINING",
+        "current_regime_self_transition_prob": p_stay,
     }
 
     return timing_metrics
+
+
+def build_current_regime_probabilities(timing_daily, mapping):
+    """Return the causal HMM probabilities for the latest observed trading day."""
+    latest = timing_daily.iloc[-1]
+    return {
+        f"current_prob_{regime}": float(
+            latest[f"prob_state_{int(state)}"]
+        )
+        for state, regime in mapping.items()
+    }
 
 
 def main():
@@ -1572,13 +1610,17 @@ def main():
         sorted(feat.loc[feat["year_month"] >= train_months[0], "year_month"].unique()),
     ).sort_values("date")
     timing_metrics = build_app_timing_metrics(
-        timing_daily, predicted_regime, app_metrics["regime_self_transition_prob"],
+        timing_daily, mapping, hmm_model,
+    )
+    current_probabilities = build_current_regime_probabilities(
+        timing_daily, mapping,
     )
 
     result = pd.DataFrame(
         [{
             "target_month": str(target_month),
             **timing_metrics,
+            **current_probabilities,
             "predicted_regime": predicted_regime,
             "prob_Bear": float(
                 probabilities[

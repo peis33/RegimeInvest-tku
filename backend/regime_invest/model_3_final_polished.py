@@ -2392,7 +2392,21 @@ def _with_calculated_cash(obj, baseline, role):
         result['directions']=_directions_from_deltas(changes)
         result['direction_source']='python_from_model_deltas'
         return result, []
+    # Judge numbers are advisory inputs, not authoritative portfolio math.
+    # Re-legalize the stock-only deltas at the final cash-normalization
+    # boundary as well.  This is intentionally idempotent and protects every
+    # caller from passing a stale/over-budget CASH delta into validation.
     result=dict(obj)
+    stock_assets = set(baseline) - {'CASH'}
+    if isinstance(changes, dict) and stock_assets.issubset(changes):
+        stock_only = {asset: changes[asset] for asset in stock_assets}
+        candidate = dict(result)
+        candidate['weight_changes_pp'] = stock_only
+        candidate, legalization = _legalize_judge_stock_deltas(candidate, baseline)
+        if isinstance(candidate, dict) and isinstance(candidate.get('weight_changes_pp'), dict):
+            result = candidate
+            result['_judge_numeric_legalization'] = legalization
+            changes = result['weight_changes_pp']
     cash=float(-sum(Decimal(str(v)) for v in changes.values()))
     result['weight_changes_pp']={**changes,'CASH':cash}
     reasons=obj.get('weight_change_reasons')
@@ -5943,6 +5957,33 @@ def _feasible_judge_plans(baseline, bundles):
     return plans
 
 
+def _nearest_feasible_judge_selection(baseline, bundles, selected):
+    """Find the closest legal bundle when a Judge selects an over-budget mix."""
+    from itertools import product
+    stocks = sorted(bundles)
+    candidates = []
+    for choices in product(*(list(bundles[asset]) for asset in stocks)):
+        mapping = dict(zip(stocks, choices))
+        changes = {asset: bundles[asset][mapping[asset]]['delta'] for asset in stocks}
+        _, errors = _apply_stock_suggestions(baseline, changes)
+        if errors:
+            continue
+        _, errors = _apply_weight_changes(baseline, changes)
+        if errors:
+            continue
+        changed_choices = sum(mapping[asset] != selected.get(asset) for asset in stocks)
+        magnitude_distance = sum(
+            abs(changes[asset] - bundles[asset][selected[asset]]['delta'])
+            for asset in stocks if selected.get(asset) in bundles[asset]
+        )
+        tie_break = tuple(mapping[asset] for asset in stocks)
+        candidates.append((changed_choices, magnitude_distance, tie_break, mapping, changes))
+    if not candidates:
+        return None, None
+    _, _, _, mapping, changes = min(candidates, key=lambda item: item[:3])
+    return mapping, changes
+
+
 def _judge_evidence_aliases(catalog, pair, stocks):
     cited = {e for decision in pair for asset in stocks
              for e in decision.get('stock_evidence_ids', {}).get(asset, []) if e in catalog}
@@ -6166,16 +6207,33 @@ def _request_choice_judge(baseline, catalog, pair, discussion_history=None):
             instruction+json.dumps(shown,ensure_ascii=False),attempts=1,
             response_schema=shown_schema,include_reason_hint=False)
         errors=[]
+        selection_repair = None
         if not isinstance(selected,dict) or set(selected)!=set(bundles):errors=['invalid_choice_assets']
         elif any(not isinstance(v,str) or v not in keys or keys[v] not in bundles[a] for a,v in selected.items()):errors=['invalid_selection']
         if not errors:
             locked={a:keys[v] for a,v in selected.items()}
             deltas={a:bundles[a][k]['delta'] for a,k in locked.items()}
             _,errors=_apply_stock_suggestions(baseline,deltas)
-            if not errors:_,errors=_apply_weight_changes(baseline,deltas)
+            if not errors:
+                _,errors=_apply_weight_changes(baseline,deltas)
+            if errors:
+                original_locked = dict(locked)
+                repaired_locked, repaired_deltas = _nearest_feasible_judge_selection(
+                    baseline, bundles, locked)
+                if repaired_locked is not None:
+                    locked = repaired_locked
+                    deltas = repaired_deltas
+                    selected = {asset: names[choice] for asset, choice in locked.items()}
+                    selection_repair = {
+                        'original_selection': original_locked,
+                        'repaired_selection': dict(locked),
+                        'method': 'nearest_feasible_bundle_by_choice_distance_then_delta_distance',
+                    }
+                    _,errors=_apply_weight_changes(baseline,deltas)
         checks.append({'order':'forward' if check_index==0 else 'repeat','raw':raw,
                        'selection':selected,'errors':errors,
-                       'deltas':dict(deltas) if not errors else None})
+                       'deltas':dict(deltas) if not errors else None,
+                       'selection_repair':selection_repair})
         if errors:
             record_progress(stage='validation_failed',validation_errors=errors)
             return None,{'ok':False,'raw':raw,'retry':'','errors':errors,'retried':False,
@@ -6221,7 +6279,9 @@ def _request_choice_judge(baseline, catalog, pair, discussion_history=None):
                   eid for ids in refs.values() for eid in ids)),
               'rejected_claim_ids':[],'reason_code':'evidence_balance',
               'order_consistency':{'passed':True,'check_count':2,'scope':'allocation_only',
-                  'selections':[c['selection'] for c in checks]}}
+                  'selections':[c['selection'] for c in checks]},
+              'judge_selection_repair':[c['selection_repair'] for c in checks
+                                        if c.get('selection_repair')]}
     decision,_=_with_calculated_cash(decision,baseline,'judge')
     return decision,{'ok':True,'raw':raw,'retry':'','errors':[],'retried':False,
                      'stage':'complete','call_count':2,'workflow':'selection_with_disclosure',
@@ -6473,6 +6533,8 @@ def _delta_judge(evidence,catalog,debate,budget):
         raise ModelDecisionError('judge', debate['round_count'], log)
     j=dict(obj)
     numeric_audit = dict(j.pop('_judge_numeric_legalization', {}) or {})
+    if j.get('judge_selection_repair'):
+        numeric_audit['selection_repair'] = j['judge_selection_repair']
     requested_stock = numeric_audit.get('requested_stock_deltas_pp')
     if isinstance(requested_stock, dict):
         j['requested_weight_changes_pp'] = dict(requested_stock)

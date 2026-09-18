@@ -191,7 +191,7 @@ function ProbabilityBars({
         { width, height, padding, marginTop },
       ]}
     >
-      <Text style={styles.probabilityTitle}>各市場狀態發生機率</Text>
+      <Text style={styles.probabilityTitle}>下期市場狀態預測機率</Text>
       {probabilities.map(({ key, probability, config }, index) => {
         const fillWidth = probability === null
           ? 0
@@ -269,6 +269,20 @@ function formatDuration(market) {
     return lower === upper ? `${lower}週` : `${lower}-${upper}週`;
   }
   return '--';
+}
+
+function formatElapsedDuration(market) {
+  const elapsed = toFiniteNumber(market?.elapsed_regime_trading_days);
+  if (elapsed === null || elapsed < 0) {
+    return { value: '待確認', unit: '' };
+  }
+  if (elapsed < 5) {
+    return { value: String(Math.round(elapsed)), unit: '天' };
+  }
+  return {
+    value: String(Math.round((elapsed / 5) * 10) / 10),
+    unit: '週',
+  };
 }
 
 function getMarketWarning(regime, duration) {
@@ -356,6 +370,7 @@ function SummaryMetric({
   horizontalPadding,
   backgroundColor,
   speechBubble = false,
+  elapsedUnit = '週',
 }) {
   return (
     <View
@@ -381,7 +396,7 @@ function SummaryMetric({
         <View style={{ width: '100%' }}>
           <Text style={{ color: valueColor || accent, fontSize: 12 * textScale, paddingHorizontal: horizontalPadding }}>已持續</Text>
           <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.summaryMetricValue, { color: valueColor || accent, fontSize: 30 * textScale, lineHeight: 33 * textScale }]}>
-            {elapsed}<Text style={{ fontSize: 14 * textScale }}>{elapsed === '待確認' ? '' : '週'}</Text>
+            {elapsed}<Text style={{ fontSize: 14 * textScale }}>{elapsed === '待確認' ? '' : elapsedUnit}</Text>
           </Text>
         </View>
       ) : null}
@@ -616,7 +631,11 @@ export default function Home() {
         .then((result) => {
           if (active) {
             setLatestInvestment(result);
-            setMarketRegime(result?.market?.predicted_regime || null);
+            setMarketRegime(
+              result?.market?.observed_regime
+                || result?.market?.predicted_regime
+                || null,
+            );
           }
         })
         .catch((error) => {
@@ -676,10 +695,14 @@ export default function Home() {
   const hasRegimeProbabilityData = regimeProbabilities.some(
     ({ probability }) => probability !== null,
   );
-  const dominantRegimeKey = getDominantRegimeKey(
-    market,
-    market.predicted_regime || (resolvedInvestment ? marketRegime : null),
-  );
+  // The main status image represents the currently observed regime. The
+  // probability bars below remain the model's forecast for the next period.
+  const dominantRegimeKey = market.observed_regime
+    ? getMarketStatusKey(market.observed_regime)
+    : getDominantRegimeKey(
+      market,
+      market.predicted_regime || (resolvedInvestment ? marketRegime : null),
+    );
   const marketKey = dominantRegimeKey || 'sideways';
   const marketStatus = getMarketStatusConfig(marketKey);
   const orderedRegimeProbabilities = [...regimeProbabilities].sort((left, right) => {
@@ -692,6 +715,7 @@ export default function Home() {
     return right.probability - left.probability;
   });
   const durationLabel = formatDuration(market);
+  const elapsedDuration = formatElapsedDuration(market);
   const durationMatch = durationLabel.match(/^(.+?)(週)$/);
   const durationValue = durationMatch ? durationMatch[1] : durationLabel;
   const durationUnit = durationMatch ? durationMatch[2] : null;
@@ -914,9 +938,8 @@ export default function Home() {
         >
           <SummaryMetric
             label="預估剩餘"
-            elapsed={toFiniteNumber(market?.elapsed_regime_trading_days) === null
-              ? '待確認'
-              : String(Math.round(Number(market.elapsed_regime_trading_days) / 5 * 10) / 10)}
+            elapsed={elapsedDuration.value}
+            elapsedUnit={elapsedDuration.unit}
             speechBubble
             value={durationValue}
             unit={durationUnit}
@@ -1036,11 +1059,6 @@ export default function Home() {
                 {marketChangeLabel}
               </Text>
             </View>
-            {marketDataDate ? (
-              <Text style={{ color: '#BDBDBD', fontSize: 11, lineHeight: 16, marginTop: 4 }}>
-                行情 {marketDataDate}・較前一交易日
-              </Text>
-            ) : null}
           </View>
 
           <ProbabilityBars
