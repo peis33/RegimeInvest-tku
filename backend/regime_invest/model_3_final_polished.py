@@ -80,6 +80,16 @@ NEWS_PAGE_MARKER_RE = re.compile(
     flags=re.I,
 )
 
+# News facts are rendered in Traditional Chinese, but a few short finance and
+# semiconductor abbreviations are meaningful in a Chinese headline.  Keep
+# these tokens valid instead of treating them as an English sentence.  The
+# display sanitizer already removes ordinary English prose.
+NEWS_REASONING_ALLOWED_ENGLISH = frozenset({
+    'ADR', 'AI', 'ASIC', 'CPU', 'CPI', 'CSP', 'DRAM', 'ETF', 'EPS',
+    'Fed', 'GDP', 'GPU', 'HPC', 'IPO', 'LED', 'MHz', 'MW', 'OLED',
+    'PCB', 'PMI', 'USD', 'V2X',
+})
+
 CALL_TIMEOUT = float(os.getenv("MODEL3_CALL_TIMEOUT", "180"))
 # Keep repeated structured calls reproducible without changing the selected
 # local models.  This is especially important for the Judge consistency gate.
@@ -2737,6 +2747,7 @@ def _normalize_first_round_news_reasoning(obj, baseline, catalog):
             len(model_fact) >= 2
             and bool(re.search(r'[\u4e00-\u9fff]', model_fact))
             and not re.search(r'\b(?:NEWS|RISK|ER|SCORE|WEIGHT|CONC|REGIME|DURATION|MTA)_\d+\b', model_fact, re.I)
+            and not _news_reasoning_english_tokens(model_fact)
             and (not source_terms
                  or len(matching_terms) >= 2
                  or any(len(term) >= 3 for term in matching_terms))
@@ -2775,6 +2786,7 @@ def _normalize_first_round_news_reasoning(obj, baseline, catalog):
             len(model_impact) >= 2
             and bool(re.search(r'[\u4e00-\u9fff]', model_impact))
             and not re.search(r'\b(?:NEWS|RISK|ER|SCORE|WEIGHT|CONC|REGIME|DURATION|MTA)_\d+\b', model_impact, re.I)
+            and not _news_reasoning_english_tokens(model_impact)
             and any(term in model_impact for term in impact_terms)
             and not model_signal_conflict
             and not opposite_signal
@@ -2801,6 +2813,19 @@ def _validate_judge_reason_semantics(obj, catalog):
     cash balancing, and total-weight constraints are validated elsewhere in Python.
     """
     return []
+
+
+def _news_reasoning_english_tokens(text):
+    """Return ordinary English words found in a Chinese news explanation.
+
+    A previous validator rejected every two-letter token.  That made a
+    correctly rendered headline such as ``聯電ADR上漲`` invalid even though
+    ``_display_clean_text`` deliberately preserves ADR.  Keep the strict
+    guard against English prose while allowing standard market acronyms.
+    """
+    tokens = re.findall(r'(?<![A-Za-z])[A-Za-z]{2,}(?![A-Za-z])', str(text or ''))
+    return [token for token in tokens
+            if token.upper() not in NEWS_REASONING_ALLOWED_ENGLISH]
 
 def _validate_reason_amounts(obj, baseline):
     """Check explicit recommendation amounts, not arbitrary market numbers."""
@@ -3297,7 +3322,7 @@ def _news_reasoning_errors(obj, baseline, catalog):
         supports = info.get('supports')
         if re.search(r'\b(?:NEWS|RISK|ER|SCORE|WEIGHT|CONC|REGIME|DURATION|MTA)_\d+\b', fact + impact, re.I):
             errors.append('news_reasoning_internal_code:' + asset)
-        if re.search(r'(?<![A-Za-z])[A-Za-z]{2,}(?![A-Za-z])', fact + impact):
+        if _news_reasoning_english_tokens(fact + impact):
             errors.append('news_reasoning_english:' + asset)
         delta = changes.get(asset)
         expected = 'increase' if isinstance(delta, (int, float)) and delta > 0 else (
@@ -5012,6 +5037,7 @@ def _delta_agent_context(role,round_no,holdings,catalog,profile,baseline,budget,
              '只能引用實際提供且屬於該股或整體市場的證據，不把市場新聞當成個股事實。'
              '維持配置也要交代為何增減的依據不足；不要為了填理由改動自己的數值判斷。'
              '引用新聞時須在理由中說明新聞的具體事件及其與本股判斷的關聯，不能只說新聞支持或反面影響。'
+             '每檔股票的news_reasoning只能描述該股票自己的新聞，不可把其他股票的事件複製過來；fact至少帶出該則新聞的兩個可辨識事件詞。'
              '引用ID放stock_evidence_ids，理由優先寫事件與取捨，避免ID占滿字數。'
              '每股仍遵守既有60字上限，優先保留因果與取捨，不抄排名表，不輸出英文長句。')
     if round_no == 1:

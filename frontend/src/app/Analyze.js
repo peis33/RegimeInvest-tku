@@ -1316,15 +1316,34 @@ export default function Analyze({ route: incomingRoute }) {
 
   // Identity is an initial default, never a tab-focus synchronization rule.
   const appliedPreferredGroup = useRef(false);
+  const previousPreferredGroup = useRef(null);
   useEffect(() => {
     if (!isAnalyzeFocused || !persistentStateReady) return;
+    const nextGroupParams = getStockGroupRouteParams(preferredGroup);
+    if (!nextGroupParams) return;
+
+    const identityChanged = previousPreferredGroup.current !== null
+      && previousPreferredGroup.current !== preferredGroup;
+    previousPreferredGroup.current = preferredGroup;
+
+    // A real identity change from Setting must replace the old Analyze group.
+    // The previous route still contains stockGroup, so checking only route
+    // params would incorrectly treat that stale value as a manual selection
+    // and immediately calculate the old portfolio again.
+    if (identityChanged) {
+      lastRequestedScope.current = null;
+      setCustomGroupId(null);
+      setCategoryId(nextGroupParams.categoryId);
+      setInvestorType(nextGroupParams.investorType);
+      navigation.setParams(nextGroupParams);
+      return;
+    }
+
     if (appliedPreferredGroup.current) return;
     appliedPreferredGroup.current = true;
     // Preserve explicit group navigation (including a restored tab route).
     if (route?.params?.stockGroup || route?.params?.customGroupId
         || route?.params?.categoryId || route?.params?.investorType) return;
-    const nextGroupParams = getStockGroupRouteParams(preferredGroup);
-    if (!nextGroupParams) return;
 
     setCustomGroupId(null);
     setCategoryId(nextGroupParams.categoryId);
