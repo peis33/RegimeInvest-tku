@@ -24,6 +24,7 @@
     "react-native-web": "^0.21.2"
   },
   "scripts": {
+    "test:market-card": "node --test tests/marketCardArtwork.test.cjs",
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",

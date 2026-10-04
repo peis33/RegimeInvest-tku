@@ -74,7 +74,7 @@ export default function InAppAlertBanner({ notifications, onDismissAll, width })
   );
 }
 const styles = StyleSheet.create({
-  card: { width: '100%', backgroundColor: '#607080', borderRadius: 8, borderWidth: 1, borderColor: '#BCC6CE', overflow: 'hidden' },
+  card: { width: '100%', backgroundColor: '#607080', borderRadius: 10, borderWidth: 1, borderColor: '#BCC6CE', overflow: 'hidden' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 14 },
   content: { flex: 1 },
   title: { color: '#FFFFFF', fontSize: 17, lineHeight: 23 },
@@ -82,7 +82,7 @@ const styles = StyleSheet.create({
   company: { color: '#8B3535' },
   closeSmall: { position: 'absolute', top: 0, right: 0, width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   closeSmallText: { color: '#C7CDD2', fontSize: 27, lineHeight: 30 },
-  detailsLink: { borderTopWidth: 1, borderTopColor: '#919CA6', alignItems: 'center', paddingVertical: 5 },
+  detailsLink: { borderTopWidth: 1, borderTopColor: '#919CA6', alignItems: 'center', paddingVertical: 7 },
   detailsLinkText: { color: '#DDE2E8', fontSize: 15 },
   page: { flex: 1, backgroundColor: '#2E2F2E' },
   header: { backgroundColor: '#505E6A', paddingBottom: 22, alignItems: 'center' },

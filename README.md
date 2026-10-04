@@ -190,7 +190,8 @@ cd ..
 - 加權指數歷史資料與 `加權指數2026.csv`；歷史路徑可由 `HISTORY_CSV_PATH` 設定。
 - `小戶10.csv`、`中間戶10.csv`、`大戶10.csv`。
 - `model_2_investor_profile_historical.csv`（管線前置檢查需要）。
-- `stock_detail_historical.csv`、`介面圖表全部資料.csv`。
+- `介面圖表全部資料.csv`：首頁加權指數、個股行情／圖表、股價提醒與市場強弱分級的共用來源。
+- `stock_detail_historical.csv`：保留供歷史研究／回測使用，App 行情不再讀取此檔。
 
 欄位與編碼以各讀取程式為準；股票池支援程式指定的 CP950／UTF-8 編碼。資料集不保證全部隨倉庫提供，缺少資料時不能直接完成模型流程。
 
@@ -243,6 +244,21 @@ curl http://127.0.0.1:8000/health
 | POST | `/api/investment/discussion` | 啟動／重用目前配置的討論 |
 | GET | `/api/stocks/{stock_id}/detail` | 個股資料 |
 | GET | `/api/stocks/{stock_id}/charts` | 個股圖表資料 |
+
+首頁市場卡片使用 API 的 `market.display` 分級：目前 HMM 的
+`observed_regime` 決定牛／熊／盤整，加權指數的 Wilder ADX(14) 決定強弱。
+ADX < 25 為小牛／小熊，25 ≤ ADX < 40 為普通牛／普通熊，ADX ≥ 40 為大牛／大熊；
+牛熊方向與 +DI／−DI 不一致時維持小級，盤整固定顯示盤整。
+ADX 只使用 `timing_as_of` 當日及之前的行情，不使用下期預測機率分級。
+行情統一讀取 `backend/regime_invest/介面圖表全部資料.csv`；
+Model 1 仍讀取加權指數模型輸入檔，不受這項介面來源整合影響。
+
+卡片框對應為：大牛 `Frame_bigBull.svg`、大熊 `Frame_bigBear.svg`、
+普通牛 `Frame_normalBull.svg`、普通熊 `Frame_normalBear.svg`、
+盤整 `Frame_snake.svg`、小牛／小熊 `Frame_small.svg`。
+若行情不足、缺少觀察日期或該日行情，保留原始牛／熊標籤與對應普通框，
+不假定大小等級；盤整仍使用 snake 框。
+這些分級為 App 展示規則，不改寫 Model 1/2 的計算結果。
 
 自選配置的請求範例（股票仍須存在於對應資料池）：
 

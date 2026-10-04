@@ -91,6 +91,16 @@ NEWS_REASONING_ALLOWED_ENGLISH = frozenset({
 })
 
 CALL_TIMEOUT = float(os.getenv("MODEL3_CALL_TIMEOUT", "180"))
+
+
+def ollama_base_url():
+    """Return the Ollama endpoint selected for this user's model store."""
+    host = os.getenv("OLLAMA_HOST", "http://localhost:11434").strip()
+    if "://" not in host:
+        host = f"http://{host}"
+    return host.rstrip("/")
+
+
 # Keep repeated structured calls reproducible without changing the selected
 # local models.  This is especially important for the Judge consistency gate.
 DETERMINISTIC_SEED = 42
@@ -213,7 +223,7 @@ def json_call(model, system, prompt, attempts=2, response_schema=None, *, includ
                 for transport_attempt in range(1, max_transport_attempts + 1):
                     try:
                         req = urllib.request.Request(
-                            "http://localhost:11434/api/chat",
+                            f"{ollama_base_url()}/api/chat",
                             data=request_body,
                             headers={"Content-Type": "application/json"},
                             method="POST",
@@ -249,7 +259,10 @@ def json_call(model, system, prompt, attempts=2, response_schema=None, *, includ
                     )
 
             else:
-                r = ollama.Client(timeout=CALL_TIMEOUT).chat(
+                r = ollama.Client(
+                    host=ollama_base_url(),
+                    timeout=CALL_TIMEOUT,
+                ).chat(
                     model=model,
                     messages=messages,
                     format=response_schema if response_schema is not None else "json",

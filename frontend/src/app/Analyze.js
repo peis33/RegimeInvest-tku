@@ -1,6 +1,8 @@
 import { STOCKS } from '../data/stocks';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Animated,
+  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -66,6 +68,11 @@ const PORTFOLIO_DETAIL_COLORS = [
 // 圓盤與股票明細共用同一組排名顏色，確保同一支股票在兩處顯示一致。
 const PORTFOLIO_DONUT_COLORS = PORTFOLIO_DETAIL_COLORS;
 const PORTFOLIO_CASH_COLOR = '#050505';
+// Adjacent SVG shapes need a sub-pixel overlap so native antialiasing cannot
+// expose the black track through their shared edge.
+const DONUT_SEAM_OVERLAP = 0.75;
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+const AnimatedPath = Animated.createAnimatedComponent(Path);
 
 const PORTFOLIO_SUMMARY_SCALE = 0.94;
 
@@ -288,11 +295,20 @@ function formatSummaryPercent(value) {
 }
 
 function getPortfolioWeight(row) {
-  const rawWeight =
+  // Backend `*_percent` fields are already expressed as 0-100 percentages.
+  // Only fractional fields such as `final_weight` / `weight` use 0-1 values.
+  const rawPercentWeight =
     row?.final_weight_percent ??
     row?.finalWeightPercent ??
     row?.weight_percent ??
-    row?.weight;
+    row?.weightPercent;
+  const percentWeight = toSummaryNumber(rawPercentWeight);
+
+  if (percentWeight !== null) {
+    return percentWeight;
+  }
+
+  const rawWeight = row?.final_weight ?? row?.finalWeight ?? row?.weight;
   const weight = toSummaryNumber(rawWeight);
 
   if (weight === null) {
@@ -497,28 +513,30 @@ function buildPortfolioSummary(profile, routeParams, portfolio) {
       : normalizedRisk <= 0.018
         ? 'medium'
         : 'high';
-  const recommendedStockRows = purchasedStockRows.slice(0, 5);
+  // Match the whole-percent label in the table: positions that display as
+  // 0% should not leave a detail row or a tiny round cap in the donut.
+  const visibleStockRows = purchasedStockRows.filter(
+    (row) => Math.round(row.weight) > 0,
+  );
+  const recommendedStockRows = visibleStockRows.slice(0, 5);
   const detailRows = recommendedStockRows;
-  const selectedStockEntries = purchasedStockRows.map((row, index) => ({
+  const visibleStockPercent = visibleStockRows.reduce(
+    (sum, row) => sum + row.weight,
+    0,
+  );
+  // Scale only the drawn arcs to keep the ring complete after hiding tiny
+  // positions. Actual weights, amounts, stock totals and cash stay unchanged.
+  const donutStockScale = visibleStockPercent > 0
+    ? stockPercent / visibleStockPercent
+    : 0;
+  const selectedStockEntries = visibleStockRows.map((row, index) => ({
     row,
     index,
   }));
-  // Keep yellow next to the black cash segment at the start of the donut,
-  // and move the coral/red third-ranked holding next to it at the end.  This
-  // gives both requested rounded caps a real black-side boundary even when
-  // five stocks are present in the chart.
-  const donutStockEntries = selectedStockEntries.length > 2
-    ? [
-        selectedStockEntries[0],
-        selectedStockEntries[1],
-        ...selectedStockEntries.slice(3),
-        selectedStockEntries[2],
-      ]
-    : selectedStockEntries;
   const donutSegments = [
-    ...donutStockEntries.map(({ row, index }) => ({
+    ...selectedStockEntries.map(({ row, index }) => ({
       key: `${row.stock_id || row.symbol || row.name || 'stock'}-${index}`,
-      value: row.weight,
+      value: row.weight * donutStockScale,
       color: PORTFOLIO_DONUT_COLORS[index % PORTFOLIO_DONUT_COLORS.length],
     })),
     ...(cashPercent > 0
@@ -566,47 +584,82 @@ function getDonutArcPath(center, radius, startAngle, endAngle) {
   ].join(' ');
 }
 
-function getDonutSegmentPath(center, outerRadius, innerRadius, startAngle, endAngle) {
-  const outerStart = getDonutPoint(center, outerRadius, startAngle);
-  const outerEnd = getDonutPoint(center, outerRadius, endAngle);
-  const innerEnd = getDonutPoint(center, innerRadius, endAngle);
-  const innerStart = getDonutPoint(center, innerRadius, startAngle);
-  const largeArcFlag = endAngle - startAngle > 180 ? 1 : 0;
+function getDonutRoundCapPath(center, radius, strokeWidth, angle, atStart, overlap) {
+  const endpoint = getDonutPoint(center, radius, angle);
+  const radians = (angle * Math.PI) / 180;
+  const halfWidth = strokeWidth / 2;
+  const radialX = Math.cos(radians) * halfWidth;
+  const radialY = Math.sin(radians) * halfWidth;
+  const outerPoint = {
+    x: endpoint.x + radialX,
+    y: endpoint.y + radialY,
+  };
+  const innerPoint = {
+    x: endpoint.x - radialX,
+    y: endpoint.y - radialY,
+  };
+  const sweepFlag = atStart ? 0 : 1;
+  const direction = atStart ? 1 : -1;
+  const overlapX = -Math.sin(radians) * overlap * direction;
+  const overlapY = Math.cos(radians) * overlap * direction;
 
+  // Draw only the outward half of the cap. The underlying butt-ended arc
+  // supplies the other half, so a short segment cannot become a full dot.
+  // Extend its flat base into that arc to hide the native antialiasing seam.
   return [
-    `M ${outerStart.x} ${outerStart.y}`,
-    `A ${outerRadius} ${outerRadius} 0 ${largeArcFlag} 1 ${outerEnd.x} ${outerEnd.y}`,
-    `L ${innerEnd.x} ${innerEnd.y}`,
-    `A ${innerRadius} ${innerRadius} 0 ${largeArcFlag} 0 ${innerStart.x} ${innerStart.y}`,
+    `M ${outerPoint.x} ${outerPoint.y}`,
+    `A ${halfWidth} ${halfWidth} 0 0 ${sweepFlag} ${innerPoint.x} ${innerPoint.y}`,
+    `L ${innerPoint.x + overlapX} ${innerPoint.y + overlapY}`,
+    `L ${outerPoint.x + overlapX} ${outerPoint.y + overlapY}`,
     'Z',
   ].join(' ');
 }
 
 function PortfolioDonut({ size, strokeWidth, stockPercent, segments, scale = 1 }) {
+  const revealProgress = useRef(new Animated.Value(0)).current;
+  const segmentSignature = segments
+    .map((segment) => `${segment.key}:${segment.value}:${segment.color}`)
+    .join('|');
   const center = size / 2;
   const outerRadius = size / 2;
   const innerRadius = Math.max(0, outerRadius - strokeWidth);
   const arcRadius = (outerRadius + innerRadius) / 2;
+  const rawSegmentGeometry = segments.map((segment) => ({
+    ...segment,
+    rawDegrees: (segment.value / 100) * 360,
+  }));
+
   let angle = -90;
-  const segmentGeometry = segments.map((segment) => {
+  const segmentGeometry = rawSegmentGeometry.map((segment) => {
     const startAngle = angle;
-    const endAngle = angle + (segment.value / 100) * 360;
+    const endAngle = angle + segment.rawDegrees;
     angle = endAngle;
 
     return {
       ...segment,
       startAngle,
       endAngle,
-      degrees: endAngle - startAngle,
+      degrees: segment.rawDegrees,
     };
   });
   const visibleSegmentGeometry = segmentGeometry.filter(
     (segment) => segment.value > 0,
   );
-  const stockSegmentGeometry = visibleSegmentGeometry.filter(
-    (segment) => segment.color !== PORTFOLIO_CASH_COLOR,
-  );
-  const stockSegmentCount = stockSegmentGeometry.length;
+  useEffect(() => {
+    revealProgress.stopAnimation();
+    revealProgress.setValue(0);
+    const animation = Animated.timing(revealProgress, {
+      toValue: 1,
+      duration: 1700,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    });
+    animation.start();
+
+    return () => {
+      animation.stop();
+    };
+  }, [revealProgress, segmentSignature]);
 
   return (
     <View
@@ -615,99 +668,137 @@ function PortfolioDonut({ size, strokeWidth, stockPercent, segments, scale = 1 }
       style={[styles.portfolioDonut, { width: size, height: size }]}
     >
       <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        {segmentGeometry.map((segment) => {
-          return (
-            segment.degrees >= 359.99 ? (
-              <Circle
-                key={segment.key}
+        <Circle
+          cx={center}
+          cy={center}
+          r={arcRadius}
+          fill="none"
+          stroke={PORTFOLIO_CASH_COLOR}
+          strokeWidth={strokeWidth}
+        />
+        {visibleSegmentGeometry.map((segment, index) => {
+          if (segment.color === PORTFOLIO_CASH_COLOR) return null;
+
+          const coloredSegmentCount = visibleSegmentGeometry.filter(
+            (candidate) => candidate.color !== PORTFOLIO_CASH_COLOR,
+          ).length;
+          const isFullCircle = segment.rawDegrees >= 359.99 && coloredSegmentCount === 1;
+          const nextSegment = visibleSegmentGeometry[index + 1];
+          const seamOverlapDegrees = nextSegment && nextSegment.color !== PORTFOLIO_CASH_COLOR
+            ? (Math.min(DONUT_SEAM_OVERLAP, arcRadius * nextSegment.degrees * Math.PI / 360) / arcRadius) * 180 / Math.PI
+            : 0;
+          const renderStartAngle = segment.startAngle;
+          const renderEndAngle = segment.endAngle + seamOverlapDegrees;
+          const renderDegrees = segment.degrees + seamOverlapDegrees;
+          const segmentStart = Math.max(0, (renderStartAngle + 90) / 360);
+          const segmentEnd = Math.min(1, (segment.endAngle + 90) / 360);
+          const segmentReveal = revealProgress.interpolate({
+            inputRange: [segmentStart, Math.max(segmentStart + 0.0001, segmentEnd)],
+            outputRange: [0, 1],
+            extrapolate: 'clamp',
+          });
+          const pathLength = isFullCircle
+            ? 2 * Math.PI * arcRadius
+            : (renderDegrees / 360) * 2 * Math.PI * arcRadius;
+          const animatedDashOffset = segmentReveal.interpolate({
+            inputRange: [0, 1],
+            outputRange: [pathLength, 0],
+          });
+
+          if (isFullCircle) {
+            const circumference = 2 * Math.PI * arcRadius;
+            const fullCircleDashOffset = revealProgress.interpolate({
+              inputRange: [0, 1],
+              outputRange: [circumference, 0],
+            });
+            return (
+              <AnimatedCircle
+                key={`${segment.key}-full-circle`}
                 cx={center}
                 cy={center}
                 r={arcRadius}
-                fill="none"
-                stroke={segment.color}
-                strokeWidth={strokeWidth}
+              fill="none"
+              stroke={segment.color}
+              strokeWidth={strokeWidth}
+              // Keep the full-circle case seamless; there are no visible
+              // segment ends to round when one stock occupies 100%.
+              strokeLinecap="butt"
+              strokeDasharray={`${circumference} ${circumference}`}
+              strokeDashoffset={fullCircleDashOffset}
+                rotation={-90}
+                origin={`${center}, ${center}`}
               />
-            ) : segment.color === PORTFOLIO_DONUT_COLORS[0] ||
-              segment.color === PORTFOLIO_DONUT_COLORS[2] ? (
-              <Path
-                key={segment.key}
-                d={getDonutArcPath(
-                  center,
-                  arcRadius,
-                  segment.startAngle,
-                  segment.endAngle,
-                )}
-                fill="none"
-                stroke={segment.color}
-                strokeWidth={strokeWidth}
-                strokeLinecap="butt"
-              />
-            ) : (
-              <Path
-                key={segment.key}
-                d={getDonutSegmentPath(
-                  center,
-                  outerRadius,
-                  innerRadius,
-                  segment.startAngle,
-                  segment.endAngle,
-                )}
-                fill={segment.color}
-              />
-            )
-          );
-        })}
-        {segmentGeometry.map((segment) => {
-          if (segment.degrees >= 359.99 || segment.value <= 0) return null;
-
-          const isStockSegment = segment.color !== PORTFOLIO_CASH_COLOR;
-          if (!isStockSegment) return null;
-
-          const visibleSegmentIndex = visibleSegmentGeometry.findIndex(
-            (candidate) => candidate.key === segment.key,
-          );
-          if (visibleSegmentIndex < 0) return null;
-
-          // Ignore zero-weight selections when finding the actual neighbours;
-          // they have no visible edge and should not block a cap from reaching
-          // the black cash segment.
-          const previousSegment =
-            visibleSegmentGeometry[
-              (visibleSegmentIndex - 1 + visibleSegmentGeometry.length) %
-                visibleSegmentGeometry.length
-            ];
-          const nextSegment =
-            visibleSegmentGeometry[
-              (visibleSegmentIndex + 1) % visibleSegmentGeometry.length
-            ];
-          const isBlackSegment = (candidate) =>
-            candidate?.color === PORTFOLIO_CASH_COLOR;
-          const capAngles = [];
-
-          if (stockSegmentCount === 1) {
-            // One stock occupies one coloured arc, so both of its ends are
-            // exposed and should be rounded.
-            capAngles.push(segment.startAngle, segment.endAngle);
-          } else {
-            // With two or more stocks, only the outer ends touching the black
-            // cash arc are rounded; inner stock-to-stock dividers stay clean.
-            if (isBlackSegment(previousSegment)) {
-              capAngles.push(segment.startAngle);
-            }
-            if (isBlackSegment(nextSegment)) {
-              capAngles.push(segment.endAngle);
-            }
+            );
           }
 
-          return capAngles.map((capAngle, capIndex) => {
-            const capPoint = getDonutPoint(center, arcRadius, capAngle);
+          return (
+            <AnimatedPath
+              key={segment.key}
+              d={getDonutArcPath(
+                center,
+                arcRadius,
+                renderStartAngle,
+                renderEndAngle,
+              )}
+              fill="none"
+              stroke={segment.color}
+              strokeWidth={strokeWidth}
+              strokeLinecap="butt"
+              strokeDasharray={[pathLength, pathLength]}
+              strokeDashoffset={animatedDashOffset}
+            />
+          );
+        })}
+        {visibleSegmentGeometry.map((segment, index) => {
+          if (segment.color === PORTFOLIO_CASH_COLOR || segment.rawDegrees >= 359.99) {
+            return null;
+          }
+
+          const previousSegment =
+            visibleSegmentGeometry[
+              (index - 1 + visibleSegmentGeometry.length) % visibleSegmentGeometry.length
+            ];
+          const nextSegment =
+            visibleSegmentGeometry[(index + 1) % visibleSegmentGeometry.length];
+          const capAngles = [];
+
+          // Only the ends touching the black cash arc are rounded. The ends
+          // between two coloured stock arcs stay flat and clean.
+          if (previousSegment?.color === PORTFOLIO_CASH_COLOR) {
+            capAngles.push({ angle: segment.startAngle, atStart: true });
+          }
+          if (nextSegment?.color === PORTFOLIO_CASH_COLOR) {
+            capAngles.push({ angle: segment.endAngle, atStart: false });
+          }
+          if (!capAngles.length) return null;
+
+          const segmentStart = Math.max(0, (segment.startAngle + 90) / 360);
+          const segmentEnd = Math.min(1, (segment.endAngle + 90) / 360);
+          const startCapOpacity = revealProgress.interpolate({
+            inputRange: [segmentStart, Math.min(1, segmentStart + 0.0001)],
+            outputRange: [0, 1],
+            extrapolate: 'clamp',
+          });
+          const endCapOpacity = revealProgress.interpolate({
+            inputRange: [Math.max(0, segmentEnd - 0.0001), segmentEnd],
+            outputRange: [0, 1],
+            extrapolate: 'clamp',
+          });
+
+          return capAngles.map(({ angle, atStart }, capIndex) => {
             return (
-              <Circle
-                key={`${segment.key}-rounded-cap-${capIndex}`}
-                cx={capPoint.x}
-                cy={capPoint.y}
-                r={strokeWidth / 2}
+              <AnimatedPath
+                key={`${segment.key}-cash-cap-${capIndex}`}
+                d={getDonutRoundCapPath(
+                  center,
+                  arcRadius,
+                  strokeWidth,
+                  angle,
+                  atStart,
+                  Math.min(DONUT_SEAM_OVERLAP, arcRadius * segment.degrees * Math.PI / 360),
+                )}
                 fill={segment.color}
+                opacity={atStart ? startCapOpacity : endCapOpacity}
               />
             );
           });
@@ -1254,7 +1345,7 @@ export default function Analyze({ route: incomingRoute }) {
   const backendStockRows = cardPortfolioRows.filter((row) => !isCashRow(row));
   const rankedBackendStockRows = sortByRecommendation(backendStockRows);
   const recommendedBackendStockRows = rankedBackendStockRows
-    .filter(hasSuggestedPosition)
+    .filter((row) => hasSuggestedPosition(row) && Math.round(getPortfolioWeight(row)) > 0)
     .slice(0, 5);
   const recommendationRankBySymbol = new Map(
     recommendedBackendStockRows.map((row, index) => [

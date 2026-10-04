@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
+  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,7 +12,9 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AssetSvg from '../components/AssetSvg';
 import InAppAlertBanner from '../components/InAppAlertBanner';
+import { getTabBarClearance } from '../components/TabBar';
 import { Path, Svg } from 'react-native-svg';
+import { SvgCss } from 'react-native-svg/css';
 import {
   InstitutionalChart,
   MarginChart,
@@ -22,6 +26,8 @@ import {
 } from '../services/investmentApi';
 import { useAppSettings } from '../context/AppSettingsContext';
 import useViewportDimensions from '../hooks/useViewportDimensions';
+import useMarketCardArtwork from '../hooks/useMarketCardArtwork';
+import { composeMarketCardSvg } from '../utils/marketCardSvg';
 
 const NOTICE_IMAGE = require('../assets/image/notice.svg');
 const CURRENT_STATUS_FLAT_IMAGE = require('../assets/image/CurrentStatus_flat.svg');
@@ -30,7 +36,15 @@ const CURRENT_STATUS_FALL_IMAGE = require('../assets/image/CurrentStatus_fall.sv
 const BULL_IMAGE = require('../assets/image/Bull.svg');
 const BEAR_IMAGE = require('../assets/image/Bear.svg');
 const SIDEWAYS_IMAGE = require('../assets/image/Sideways.svg');
+const FRAME_BULL_IMAGE = require('../assets/image/Frame_bigBull.svg');
+const FRAME_BEAR_IMAGE = require('../assets/image/Frame_bigBear.svg');
+const FRAME_NORMAL_BULL_IMAGE = require('../assets/image/Frame_normalBull.svg');
+const FRAME_NORMAL_BEAR_IMAGE = require('../assets/image/Frame_normalBear.svg');
+const FRAME_SNAKE_IMAGE = require('../assets/image/Frame_snake.svg');
+const FRAME_SMALL_IMAGE = require('../assets/image/Frame_small.svg');
 const GRID_SIZE = 44;
+const HOME_SECTION_GAP = 14;
+const MODEL_PENDING_MESSAGE = '正在計算模型一、二，完成後會自動更新…';
 const MARKET_CHART_SYMBOL = 'Y9999';
 const HOME_CHART_RATIOS = {
   recent: (214 + 86) / 576,
@@ -46,10 +60,29 @@ const SIDEWAYS_METRIC_COLOR = '#FFE389';
 const SIDEWAYS_METRIC_BACKGROUND = '#212121';
 const SIDEWAYS_RETURN_FRAME_COLOR = 'rgba(169, 119, 62, 0.7)';
 const SIDEWAYS_RETURN_COLOR = '#FFAE58';
+const MARKET_FRAMES = {
+  bull: { asset: FRAME_BULL_IMAGE, borderColor: '#E78B6F' },
+  bear: { asset: FRAME_BEAR_IMAGE, borderColor: '#AADF38' },
+  normalBull: { asset: FRAME_NORMAL_BULL_IMAGE, borderColor: '#855749' },
+  normalBear: { asset: FRAME_NORMAL_BEAR_IMAGE, borderColor: '#67812E' },
+  sideways: { asset: FRAME_SNAKE_IMAGE, borderColor: '#968116' },
+  small: { asset: FRAME_SMALL_IMAGE, borderColor: '#444242' },
+};
+
+const MARKET_LEVEL_CONFIG = {
+  strong_bull: { regime: 'bull', label: '大牛市', frame: MARKET_FRAMES.bull },
+  strong_bear: { regime: 'bear', label: '大熊市', frame: MARKET_FRAMES.bear },
+  normal_bull: { regime: 'bull', label: '普通牛市', frame: MARKET_FRAMES.normalBull },
+  normal_bear: { regime: 'bear', label: '普通熊市', frame: MARKET_FRAMES.normalBear },
+  sideways: { regime: 'sideways', label: '盤整', frame: MARKET_FRAMES.sideways },
+  small_bull: { regime: 'bull', label: '小牛市', frame: MARKET_FRAMES.small },
+  small_bear: { regime: 'bear', label: '小熊市', frame: MARKET_FRAMES.small },
+};
 
 const MARKET_STATUS_CONFIG = {
   bull: {
     asset: BULL_IMAGE,
+    frame: MARKET_FRAMES.normalBull,
     label: '牛市',
     statusAsset: CURRENT_STATUS_RISE_IMAGE,
     statusAssetWidth: 26,
@@ -59,9 +92,12 @@ const MARKET_STATUS_CONFIG = {
     metricColor: '#F0B2B7',
     summaryMetricColor: BULL_METRIC_COLOR,
     aspectRatio: 475 / 469,
+    imageScale: 1.2,
+    imageOffsetY: -5,
   },
   bear: {
     asset: BEAR_IMAGE,
+    frame: MARKET_FRAMES.normalBear,
     label: '熊市',
     statusAsset: CURRENT_STATUS_FALL_IMAGE,
     statusAssetWidth: 20,
@@ -72,6 +108,7 @@ const MARKET_STATUS_CONFIG = {
   },
   sideways: {
     asset: SIDEWAYS_IMAGE,
+    frame: MARKET_FRAMES.sideways,
     label: '盤整',
     statusAsset: CURRENT_STATUS_FLAT_IMAGE,
     statusAssetWidth: 28,
@@ -106,8 +143,14 @@ function getMarketStatusKey(regime) {
   return aliases[normalizedRegime] || 'sideways';
 }
 
-function getMarketStatusConfig(regime) {
-  return MARKET_STATUS_CONFIG[getMarketStatusKey(regime)];
+function getMarketStatusConfig(regime, display) {
+  const key = getMarketStatusKey(regime);
+  const level = MARKET_LEVEL_CONFIG[display?.level];
+  // Without a valid strength level, keep the base regime and its default frame.
+  const presentation = level?.regime === key
+    ? level
+    : {};
+  return { ...MARKET_STATUS_CONFIG[key], ...presentation };
 }
 
 function toFiniteNumber(value) {
@@ -185,6 +228,7 @@ function ProbabilityBars({
 }) {
   return (
     <View
+      collapsable={false}
       accessibilityLabel="牛市、盤整、熊市機率"
       style={[
         styles.probabilityPanel,
@@ -285,10 +329,18 @@ function formatElapsedDuration(market) {
   };
 }
 
+function splitDurationValue(value) {
+  const text = String(value ?? '');
+  const match = text.match(/^(少於)(\d+)$/);
+  return match
+    ? { prefix: match[1], value: match[2] }
+    : { prefix: '', value: text };
+}
+
 function getMarketWarning(regime, duration) {
-  const estimate = duration === '--' ? '' : `，預估剩餘 ${duration}`;
-  if (regime === 'bull') return `目前為牛市${estimate}，留意回檔風險，避免追高。`;
-  if (regime === 'bear') return `目前為熊市${estimate}，留意下行風險，避免急於抄底。`;
+  const estimate = duration === '--' ? '待確認' : duration;
+  if (regime === 'bull') return `目前牛市剩餘時間為${estimate}，現在追高小心被套牢`;
+  if (regime === 'bear') return `目前熊市剩餘時間為${estimate}，現在抄底小心被套牢`;
   if (regime === 'sideways') return '目前市場方向不明，建議先觀望，避免頻繁進場。';
   return '等待模型市場狀態資料。';
 }
@@ -392,56 +444,57 @@ function SummaryMetric({
             stroke={accent} strokeWidth={2} strokeLinejoin="round" />
         </Svg>
       ) : null}
-      {elapsed !== undefined ? (
-        <View style={{ width: '100%' }}>
-          <Text style={{ color: valueColor || accent, fontSize: 12 * textScale, paddingHorizontal: horizontalPadding }}>已持續</Text>
-          <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.summaryMetricValue, { color: valueColor || accent, fontSize: 30 * textScale, lineHeight: 33 * textScale }]}>
-            {elapsed}<Text style={{ fontSize: 14 * textScale }}>{elapsed === '待確認' ? '' : elapsedUnit}</Text>
-          </Text>
-        </View>
-      ) : null}
-      <Text
-        style={[
-          styles.summaryMetricLabel,
-          {
-            color: valueColor || accent,
-            fontSize: (elapsed !== undefined ? 12 : 16) * textScale,
-            lineHeight: (elapsed !== undefined ? 15 : 19) * textScale,
-            paddingHorizontal: horizontalPadding,
-          },
-        ]}
-        numberOfLines={1}
-      >
-        {label}
-      </Text>
-      <Text
-        style={[
-          styles.summaryMetricValue,
-          {
-            color: valueColor || accent,
-            fontSize: (elapsed !== undefined ? 30 : 38) * textScale,
-            lineHeight: (elapsed !== undefined ? 33 : 42) * textScale,
-          },
-        ]}
-        numberOfLines={1}
-        adjustsFontSizeToFit
-      >
-        {value}
-        {unit ? (
-          <Text
-            style={[
-              styles.summaryMetricUnit,
-              {
-                color: valueColor || accent,
-                fontSize: 16 * textScale,
-                lineHeight: 19 * textScale,
-              },
-            ]}
-          >
-            {unit}
-          </Text>
+      <View style={[styles.summaryMetricTextGroup, { paddingHorizontal: horizontalPadding }]}>
+        {elapsed !== undefined ? (
+          <View>
+            <Text style={{ color: valueColor || accent, fontSize: 12 * textScale }}>已持續</Text>
+            <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.summaryMetricValue, { color: valueColor || accent, fontSize: 30 * textScale, lineHeight: 33 * textScale }]}>
+              {elapsed}<Text style={{ fontSize: 14 * textScale }}>{elapsed === '待確認' ? '' : elapsedUnit}</Text>
+            </Text>
+          </View>
         ) : null}
-      </Text>
+        <Text
+          style={[
+            styles.summaryMetricLabel,
+            {
+              color: valueColor || accent,
+              fontSize: (elapsed !== undefined ? 12 : 16) * textScale,
+              lineHeight: (elapsed !== undefined ? 15 : 19) * textScale,
+            },
+          ]}
+          numberOfLines={1}
+        >
+          {label}
+        </Text>
+        <Text
+          style={[
+            styles.summaryMetricValue,
+            {
+              color: valueColor || accent,
+              fontSize: (elapsed !== undefined ? 30 : 38) * textScale,
+              lineHeight: (elapsed !== undefined ? 33 : 42) * textScale,
+            },
+          ]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+        >
+          {value}
+          {unit ? (
+            <Text
+              style={[
+                styles.summaryMetricUnit,
+                {
+                  color: valueColor || accent,
+                  fontSize: 16 * textScale,
+                  lineHeight: 19 * textScale,
+                },
+              ]}
+            >
+              {unit}
+            </Text>
+          ) : null}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -591,6 +644,202 @@ function buildHomeDataRows(snapshot, tabKey, chartData) {
   return [];
 }
 
+function AnimatedMarketCard({
+  asset,
+  frame,
+  accessibilityLabel,
+  width,
+  imageHeight,
+  imageScale = 1,
+  imageOffsetY = 0,
+  elapsedValue,
+  elapsedUnit,
+  remainingValue,
+  remainingUnit,
+  durationColor,
+  marginTop,
+  onPress,
+}) {
+  const flipProgress = useRef(new Animated.Value(0)).current;
+  const { artwork, error: artworkLoadError, retry: retryArtwork } = useMarketCardArtwork(frame.asset, asset);
+  const [layoutReady, setLayoutReady] = useState(false);
+  const handleLayout = useCallback(() => setLayoutReady(true), []);
+  const frameScale = width / 399;
+  // The small SVG omits the 20px glow padding on each edge. Give every card
+  // the same 490x580 stage and inset that SVG to preserve the inner alignment.
+  const isSmallFrame = frame === MARKET_FRAMES.small;
+  const shellWidth = 490 * frameScale;
+  const shellHeight = 580 * frameScale;
+  const contentLeft = 44.2856 * frameScale;
+  const contentTop = 50.4559 * frameScale;
+  const contentImageHeight = 419 * frameScale;
+  const contentFooterHeight = 69 * frameScale;
+  const composition = useMemo(() => {
+    if (!artwork) return { xml: null };
+    try {
+      return { xml: composeMarketCardSvg({
+        frameXml: artwork.frameXml,
+        animalXml: artwork.animalXml,
+        smallFrame: isSmallFrame,
+        imageHeight: imageHeight / frameScale,
+        imageScale,
+        imageOffsetY,
+      }) };
+    } catch (error) {
+      return { xml: null, error };
+    }
+  }, [artwork, isSmallFrame, imageHeight, frameScale, imageScale, imageOffsetY]);
+  const assetsReady = Boolean(composition.xml);
+  const artworkError = artworkLoadError || composition.error;
+  const remainingDuration = splitDurationValue(remainingValue);
+  const durationScale = Math.max(0.75, Math.min(1, width / 300));
+  const durationLabelFontSize = Math.max(10, 12 * durationScale);
+  // Also leave room for longer values such as "12.5" and "12-13" on phones.
+  const estimateValueWidth = (value, fontSize) => Array.from(String(value ?? ''))
+    .reduce((total, character) => total + fontSize * (character.charCodeAt(0) > 127 ? 1 : 0.75), 0);
+  const labelsWidth = (7 + String(elapsedUnit || '').length + String(remainingUnit || '').length)
+    * durationLabelFontSize;
+  const valuesWidth = estimateValueWidth(elapsedValue, 30)
+    + estimateValueWidth(remainingDuration.prefix, 25)
+    + estimateValueWidth(remainingDuration.value, 30);
+  const valueScale = Math.min(durationScale, Math.max(0, width - labelsWidth - 24) / Math.max(1, valuesWidth));
+  const durationLabelStyle = [styles.marketCardDurationText, {
+    color: durationColor,
+    fontSize: durationLabelFontSize,
+    lineHeight: Math.ceil(durationLabelFontSize * 1.3),
+  }];
+  const durationNumberStyle = [styles.marketCardDurationNumber, {
+    color: durationColor,
+    fontSize: 30 * valueScale,
+    lineHeight: Math.ceil(39 * valueScale),
+  }];
+  const durationValueStyle = [styles.marketCardDurationValue, {
+    color: durationColor,
+    fontSize: 25 * valueScale,
+    lineHeight: Math.ceil(33 * valueScale),
+  }];
+
+  useFocusEffect(useCallback(() => {
+    if (!assetsReady || !layoutReady) return undefined;
+    // Replay on each visit, after the single complete artwork has been mounted.
+    // Keep the motion finite: two complete turns, then a readable resting card.
+    flipProgress.setValue(0);
+    const flipAnimation = Animated.timing(flipProgress, {
+      toValue: 1,
+      delay: 150,
+      duration: 1800,
+      easing: Easing.inOut(Easing.cubic),
+      useNativeDriver: true,
+    });
+    const animationFrame = requestAnimationFrame(() => flipAnimation.start());
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      flipAnimation.stop();
+      flipProgress.setValue(1);
+    };
+  }, [assetsReady, layoutReady, flipProgress]));
+
+  const rotateY = flipProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '720deg'],
+  });
+  // Keep the projected card inside its fixed stage during the 3D turn, so
+  // clipping the animation cannot cut its border or overlap the next panel.
+  const turnSteps = Array.from({ length: 17 }, (_, index) => index / 16);
+  const turnScale = flipProgress.interpolate({
+    inputRange: turnSteps,
+    outputRange: turnSteps.map((step) => (
+      1 / (1 + (shellWidth / 1800) * Math.abs(Math.sin(step * Math.PI * 4)))
+    )),
+  });
+  return (
+    <View
+      collapsable={false}
+      style={[styles.marketCardStage, { width: shellWidth, height: shellHeight, marginTop }]}
+    >
+      {assetsReady ? <Animated.View
+        collapsable={false}
+        onLayout={handleLayout}
+        accessibilityElementsHidden={!assetsReady}
+        importantForAccessibility={assetsReady ? 'auto' : 'no-hide-descendants'}
+        style={[
+          styles.marketCardShell,
+          { width: shellWidth, height: shellHeight },
+          {
+            transform: [
+              { perspective: 900 },
+              { rotateY },
+              { scale: turnScale },
+            ],
+          },
+        ]}
+      >
+        <SvgCss
+          xml={composition.xml}
+          width={shellWidth}
+          height={shellHeight}
+          pointerEvents="none"
+          style={styles.marketCardFrameAsset}
+          accessibilityLabel={accessibilityLabel}
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={accessibilityLabel}
+          onPress={onPress}
+          disabled={!assetsReady}
+          style={[
+            styles.marketCardContent,
+            {
+              left: contentLeft,
+              top: contentTop,
+              width,
+              height: contentImageHeight + contentFooterHeight,
+              zIndex: 2,
+            },
+          ]}
+        >
+            <View
+              style={[styles.marketCardImage, { height: contentImageHeight }]}
+            />
+            <View
+              style={[
+                styles.marketCardDuration,
+                { height: contentFooterHeight, borderTopColor: frame.borderColor },
+              ]}
+            >
+              <View style={styles.marketCardDurationGroup}>
+                <Text style={durationLabelStyle} maxFontSizeMultiplier={1.1} numberOfLines={1}>已持續</Text>
+                <Text style={durationNumberStyle} maxFontSizeMultiplier={1.1} numberOfLines={1}>{elapsedValue}</Text>
+                {elapsedUnit ? <Text style={durationLabelStyle} maxFontSizeMultiplier={1.1} numberOfLines={1}>{elapsedUnit}</Text> : null}
+              </View>
+              <View style={styles.marketCardDurationGroup}>
+                <Text style={durationLabelStyle} maxFontSizeMultiplier={1.1} numberOfLines={1}>預估剩餘</Text>
+                {remainingDuration.prefix ? (
+                  <Text style={durationValueStyle} maxFontSizeMultiplier={1.1} numberOfLines={1}>{remainingDuration.prefix}</Text>
+                ) : null}
+                <Text style={durationNumberStyle} maxFontSizeMultiplier={1.1} numberOfLines={1}>{remainingDuration.value}</Text>
+                {remainingUnit ? <Text style={durationLabelStyle} maxFontSizeMultiplier={1.1} numberOfLines={1}>{remainingUnit}</Text> : null}
+              </View>
+            </View>
+        </Pressable>
+      </Animated.View> : null}
+      {!assetsReady ? (
+        <View style={styles.marketCardLoadingCover}>
+          <Text style={styles.marketAnimalPlaceholderText}>
+            {artworkError ? '市場卡牌載入失敗，請重新載入' : MODEL_PENDING_MESSAGE}
+          </Text>
+          {artworkError ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="重新載入市場卡牌"
+              onPress={retryArtwork} style={{ padding: 12 }}>
+              <Text style={styles.marketAnimalPlaceholderText}>重新載入</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export default function Home() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -686,7 +935,7 @@ export default function Home() {
     : investmentSnapshot || null;
   const modelStatusError = investmentRunError || investmentFetchError;
   const modelStatusMessage = investmentRunPending
-    ? '正在計算模型一、二，完成後會自動更新…'
+    ? MODEL_PENDING_MESSAGE
     : modelStatusError
       ? `模型結果載入失敗：${modelStatusError}`
       : investmentLoading ? '正在讀取模型結果…' : '尚未取得模型結果';
@@ -704,7 +953,7 @@ export default function Home() {
       market.predicted_regime || (resolvedInvestment ? marketRegime : null),
     );
   const marketKey = dominantRegimeKey || 'sideways';
-  const marketStatus = getMarketStatusConfig(marketKey);
+  const marketStatus = getMarketStatusConfig(marketKey, market.display);
   const orderedRegimeProbabilities = [...regimeProbabilities].sort((left, right) => {
     if (left.probability === null) {
       return right.probability === null ? 0 : 1;
@@ -727,29 +976,28 @@ export default function Home() {
   const marketReturnTone = getMarketReturnTone(marketReturnPercent);
 
   const warningWidth = Math.min(screenWidth * 0.84, 485);
-  const noticeSize = Math.min(28, Math.max(22, warningWidth * (26 / 318)));
-  const warningHeight = Math.max(38, noticeSize + 12);
+  const noticeSize = Math.min(30, Math.max(24, warningWidth * (28 / 318)));
+  const warningHeight = Math.max(36, noticeSize + 8);
   const marketWarningText = getMarketWarning(dominantRegimeKey, durationLabel);
   const statusWidth = Math.min(screenWidth * 0.31, 150);
-  const changeWidth = Math.min(screenWidth * 0.22, 108);
+  const changeWidth = Math.min(screenWidth * 0.31, 150);
   const statusPillHeight = Math.max(
     28,
     Math.min(32, screenWidth * (30 / 438)),
   );
   const statusHeight = statusPillHeight;
   const changeHeight = statusPillHeight;
-  const changeMarginTop = -8;
   const statusIconScale = Math.min(0.7, statusPillHeight / 24);
   const statusIconWidth = marketStatus.statusAssetWidth * statusIconScale;
   const statusIconHeight = marketStatus.statusAssetHeight * statusIconScale;
   const summaryReferenceScale = Math.min(1, screenWidth / 586);
-  const summaryWidth = Math.min(screenWidth * 0.9, 500);
-  const summaryGap = Math.max(10, Math.min(16, screenWidth * (16 / 438)));
+  const summaryWidth = Math.min(screenWidth * 0.8, 500);
+  const summaryGap = Math.max(28, Math.min(46, screenWidth * (46 / 408)));
   const summaryMetricHeight = Math.min(
-    96,
-    Math.max(90, screenWidth * (143 / 586)),
+    92,
+    Math.max(84, screenWidth * (92 / 408)),
   );
-  const statusRowWidth = Math.min(screenWidth * 0.85, 500);
+  const statusRowWidth = Math.min(screenWidth * 0.78, 500);
   const summaryBorderRadius = Math.max(
     11,
     Math.min(18, screenWidth * (18 / 586)),
@@ -771,12 +1019,12 @@ export default function Home() {
     activeTab.key,
     marketCharts,
   );
-  const isWideMarketAnimal = marketStatus.layout === 'wide';
-  const marketAnimalWidth = isWideMarketAnimal ? Math.min(screenWidth, 575) : Math.min(screenWidth * 0.84, 475);
+  // Every frame uses the same 460px visible card width on a 490px stage.
+  const marketCardOuterWidth = Math.min(screenWidth * 0.78, 460);
+  const marketCardScale = marketCardOuterWidth / 460;
+  const marketAnimalWidth = 399 * marketCardScale;
   const marketAnimalImageHeight = marketAnimalWidth / marketStatus.aspectRatio;
-  // Sideways.svg includes empty space above the snake. Crop that space only.
-  const marketAnimalImageTop = isWideMarketAnimal ? -marketAnimalWidth * (125 / 575) : 0;
-  const marketAnimalHeight = isWideMarketAnimal ? marketAnimalWidth * (272 / 575) : marketAnimalImageHeight;
+  const marketAnimalHeight = 419 * marketCardScale;
   const probabilityWidth = Math.min(screenWidth * 0.9, 500);
   const probabilityPadding = Math.max(
     12,
@@ -813,7 +1061,9 @@ export default function Home() {
     probabilityRowHeight * REGIME_ORDER.length +
     probabilityRowGap * (REGIME_ORDER.length - 1);
   const probabilityGap = Math.max(10, screenWidth * 0.025);
-  const marketAnimalMarginTop = Math.max(18, screenWidth * 0.04);
+  // Keep the metrics visually connected to the card, while leaving enough
+  // breathing room for the card's outer glow and decorative rays.
+  const marketAnimalMarginTop = Math.max(14, screenWidth * 0.04);
   const openAnalyze = useCallback(() => {
     navigation.navigate('Analyze');
   }, [navigation]);
@@ -836,6 +1086,7 @@ export default function Home() {
       </View>
       <ScrollView
         style={styles.screenScroll}
+        removeClippedSubviews={false}
         horizontal={false}
         bounces={false}
         overScrollMode="never"
@@ -849,7 +1100,9 @@ export default function Home() {
           {
             width: screenWidth,
             paddingTop: insets.top + 32,
-            paddingBottom: insets.bottom + 132,
+            // Keep the viewport behind the floating tabs; only the end of
+            // the content needs clearance so the last rows can scroll above it.
+            paddingBottom: getTabBarClearance(insets.bottom) + 24,
           },
         ]}
       >
@@ -861,8 +1114,8 @@ export default function Home() {
             {
               width: warningWidth,
               height: warningHeight,
-              borderRadius: Math.max(10, warningWidth * 0.025),
-              paddingHorizontal: Math.max(10, warningWidth * 0.025),
+              borderRadius: warningHeight / 2,
+              paddingHorizontal: Math.max(12, warningWidth * 0.03),
             },
           ]}
         >
@@ -879,7 +1132,7 @@ export default function Home() {
               {
                 marginLeft: Math.max(8, warningWidth * 0.018),
                 fontSize: Math.max(11, Math.min(14, warningWidth * (11 / 318))),
-                lineHeight: Math.max(16, Math.min(20, warningWidth * (16 / 318))),
+                lineHeight: Math.max(16, Math.min(18, warningWidth * (16 / 318))),
               },
             ]}
           >
@@ -893,6 +1146,7 @@ export default function Home() {
             {
               width: statusRowWidth,
               height: statusHeight,
+              columnGap: Math.max(18, Math.min(64, screenWidth * 0.14)),
             },
           ]}
         >
@@ -924,6 +1178,25 @@ export default function Home() {
               accessibilityLabel={`${marketStatus.label}趨勢圖示`}
             /> : null}
           </View>
+          <View
+            accessibilityLabel={`加權指數較前一交易日漲跌幅：${marketChangeLabel}，資料日期：${marketDataDate || '未知'}`}
+            style={[
+              styles.statusPill,
+              styles.changePill,
+              {
+                width: changeWidth,
+                height: changeHeight,
+                borderColor: marketReturnTone.accent,
+              },
+            ]}
+          >
+            <Text
+              style={[styles.statusPillText, { color: marketReturnTone.metricColor }]}
+              numberOfLines={1}
+            >
+              {marketChangeLabel}
+            </Text>
+          </View>
         </View>
 
         <View
@@ -936,21 +1209,6 @@ export default function Home() {
             },
           ]}
         >
-          <SummaryMetric
-            label="預估剩餘"
-            elapsed={elapsedDuration.value}
-            elapsedUnit={elapsedDuration.unit}
-            speechBubble
-            value={durationValue}
-            unit={durationUnit}
-            accent={marketStatus.borderColor || marketStatus.accent}
-            valueColor={marketStatus.summaryMetricColor || marketStatus.metricColor}
-            backgroundColor={marketStatus.metricBackgroundColor}
-            textScale={summaryReferenceScale}
-            borderRadius={summaryBorderRadius}
-            borderWidth={summaryBorderWidth}
-            horizontalPadding={summaryHorizontalPadding}
-          />
           <SummaryMetric
             label="股價漲跌"
             value={formatNumber(marketSnapshot?.change)}
@@ -976,6 +1234,7 @@ export default function Home() {
         </View>
 
         <View
+          collapsable={false}
           style={[
             styles.marketStage,
             {
@@ -985,36 +1244,22 @@ export default function Home() {
           ]}
         >
           {hasRegimeProbabilityData ? (
-            <Pressable
-              accessibilityRole="button"
+            <AnimatedMarketCard
+              asset={marketStatus.asset}
+              frame={marketStatus.frame}
               accessibilityLabel={`目前市場狀態：${marketStatus.label}`}
+              width={marketAnimalWidth}
+              imageHeight={marketAnimalImageHeight}
+              imageScale={marketStatus.imageScale}
+              imageOffsetY={marketStatus.imageOffsetY}
+              elapsedValue={elapsedDuration.value}
+              elapsedUnit={elapsedDuration.unit}
+              remainingValue={durationValue}
+              remainingUnit={durationUnit}
+              durationColor={marketStatus.summaryMetricColor || marketStatus.metricColor}
+              marginTop={marketAnimalMarginTop}
               onPress={openAnalyze}
-              style={[
-                styles.marketAnimal,
-                {
-                  width: marketAnimalWidth,
-                  height: marketAnimalHeight,
-                  marginTop: marketAnimalMarginTop,
-                },
-              ]}
-            >
-              <AssetSvg
-                asset={marketStatus.asset}
-                width={marketAnimalWidth}
-                height={marketAnimalImageHeight}
-                pointerEvents="none"
-                style={
-                  isWideMarketAnimal
-                    ? {
-                        position: 'absolute',
-                        top: marketAnimalImageTop,
-                        left: 0,
-                      }
-                    : undefined
-                }
-                accessibilityLabel={`目前市場狀態：${marketStatus.label}`}
-              />
-            </Pressable>
+            />
           ) : (
             <View
               style={[
@@ -1039,48 +1284,23 @@ export default function Home() {
             </View>
           )}
 
-          <View style={{ width: summaryWidth, alignItems: 'flex-end', marginTop: changeMarginTop }}>
-            <View
-              accessibilityLabel={`加權指數較前一交易日漲跌幅：${marketChangeLabel}，資料日期：${marketDataDate || '未知'}`}
-              style={[
-                styles.statusPill,
-                styles.changePill,
-                {
-                  width: changeWidth,
-                  height: changeHeight,
-                  borderColor: marketReturnTone.accent,
-                },
-              ]}
-            >
-              <Text
-                style={[styles.statusPillText, { color: marketReturnTone.metricColor }]}
-                numberOfLines={1}
-              >
-                {marketChangeLabel}
-              </Text>
-            </View>
-          </View>
-
-          <ProbabilityBars
-            probabilities={orderedRegimeProbabilities}
-            width={probabilityWidth}
-            height={probabilityPanelHeight}
-            rowHeight={probabilityRowHeight}
-            rowGap={probabilityRowGap}
-            padding={probabilityPadding}
-            marginTop={probabilityGap}
-            labelWidth={probabilityLabelWidth}
-            labelFontSize={probabilityLabelFontSize}
-            labelLineHeight={probabilityLabelLineHeight}
-            valueWidth={probabilityValueWidth}
-            valueFontSize={probabilityValueFontSize}
-            valueLineHeight={probabilityValueLineHeight}
-          />
-
         </View>
 
-
-
+        <ProbabilityBars
+          probabilities={orderedRegimeProbabilities}
+          width={probabilityWidth}
+          height={probabilityPanelHeight}
+          rowHeight={probabilityRowHeight}
+          rowGap={probabilityRowGap}
+          padding={probabilityPadding}
+          marginTop={probabilityGap}
+          labelWidth={probabilityLabelWidth}
+          labelFontSize={probabilityLabelFontSize}
+          labelLineHeight={probabilityLabelLineHeight}
+          valueWidth={probabilityValueWidth}
+          valueFontSize={probabilityValueFontSize}
+          valueLineHeight={probabilityValueLineHeight}
+        />
         <View
           style={[
             styles.homeDetails,
@@ -1216,7 +1436,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 14,
+    marginTop: HOME_SECTION_GAP,
   },
   statusPill: {
     flexDirection: 'row',
@@ -1247,7 +1467,7 @@ const styles = StyleSheet.create({
   summaryMetrics: {
     flexDirection: 'row',
     alignItems: 'stretch',
-    marginTop: 16,
+    marginTop: HOME_SECTION_GAP,
   },
   summaryMetric: {
     flex: 1,
@@ -1255,17 +1475,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#202120',
   },
+  summaryMetricTextGroup: {
+    alignSelf: 'center',
+    alignItems: 'flex-start',
+    maxWidth: '100%',
+  },
   summaryMetricLabel: {
     alignSelf: 'stretch',
     textAlign: 'left',
   },
   summaryMetricValue: {
-    width: '100%',
     minWidth: 0,
     marginTop: 2,
     fontFamily: 'Goldman',
     fontWeight: '400',
-    textAlign: 'center',
+    textAlign: 'left',
   },
   summaryMetricUnit: {
     fontWeight: '400',
@@ -1276,6 +1500,8 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   probabilityPanel: {
+    isolation: 'isolate',
+    zIndex: 1,
     marginTop: 0,
     flexDirection: 'column',
     justifyContent: 'flex-start',
@@ -1327,6 +1553,74 @@ const styles = StyleSheet.create({
     color: 'rgba(245, 245, 245, 0.62)',
     fontFamily: 'Goldman',
     fontSize: 13,
+  },
+  marketCardShell: {
+    position: 'relative',
+    zIndex: 0,
+    alignSelf: 'center',
+    overflow: 'visible',
+  },
+  marketCardStage: {
+    position: 'relative',
+    alignSelf: 'center',
+    isolation: 'isolate',
+    overflow: 'hidden',
+  },
+  marketCardLoadingCover: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2E2F2E',
+  },
+  marketCardFrameAsset: {
+    position: 'absolute',
+    zIndex: 0,
+  },
+  marketCardContent: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  marketCardImage: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    backgroundColor: 'transparent',
+  },
+  marketCardDuration: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 8,
+    backgroundColor: 'transparent',
+    borderTopWidth: 1,
+  },
+  marketCardDurationText: {
+    flexShrink: 0,
+    fontFamily: 'Goldman',
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: 'center',
+  },
+  marketCardDurationGroup: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    flexShrink: 0,
+  },
+  marketCardDurationValue: {
+    fontFamily: 'Goldman',
+    fontSize: 25,
+    lineHeight: 33,
+  },
+  marketCardDurationNumber: {
+    fontFamily: 'Goldman',
+    fontSize: 30,
+    lineHeight: 39,
   },
   homeDetails: {
     alignItems: 'stretch',

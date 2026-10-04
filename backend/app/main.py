@@ -17,6 +17,7 @@ from typing import Any, Literal
 
 import pandas as pd
 from . import allocation_reuse
+from .market_status import build_market_display
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,8 +40,8 @@ MODEL1_BASE_SCRIPT_FILE = PIPELINE_DIR / "hmm_mta_lstm_sliding_window_experiment
 MODEL1_STRICT_SCRIPT_FILE = PIPELINE_DIR / "hmm_mta_lstm_sliding_window_experiment_v4_strict_rolling.py"
 MODEL1_CACHE_MANIFEST_FILE = PIPELINE_DIR / "model_1_cache_manifest.json"
 MODEL1_PIPELINE_VERSION = "V5_FROZEN_STRICT_CAUSAL_T60_CW_OFF"
-STOCK_DETAIL_FILE = DATA_DIR / "stock_detail_historical.csv"
-STOCK_DETAIL_ENCODING = "big5"
+# All App quotes, charts and market strength use the same source.
+# stock_detail_historical.csv remains a separate research/backtest input.
 INTERFACE_CHART_FILE = DATA_DIR / "介面圖表全部資料.csv"
 INTERFACE_CHART_ENCODING = "big5"
 MODEL_RUNTIME_TIMEOUT_SECONDS = 1800
@@ -87,10 +88,9 @@ def write_configuration_state(state):
     temporary.replace(CONFIGURATION_STATE_FILE)
 
 # 行情 CSV 在每次 `/api/investment/latest` 或個股頁請求時都會被解析。
-# 這些檔案通常只有模型更新時才變動，因此保留進程內快取，並以檔案
-# 的修改時間與大小作為失效條件；模型重新產生檔案後會自動讀取新資料。
+# 保留進程內快取，並以檔案的修改時間與大小作為失效條件；
+# 更新共用行情檔案後會自動讀取新資料。
 data_cache_lock = threading.Lock()
-_stock_detail_frame_cache: tuple[tuple[int, int], pd.DataFrame] | None = None
 _interface_chart_frame_cache: tuple[tuple[int, int], pd.DataFrame] | None = None
 
 
@@ -279,12 +279,6 @@ STOCK_DETAIL_REQUIRED_COLUMNS = (
     "週轉率％",
 )
 
-STOCK_DETAIL_NUMERIC_COLUMNS = tuple(
-    column
-    for column in STOCK_DETAIL_REQUIRED_COLUMNS
-    if column not in {"證券代碼", "年月日", "TSE 產業別", "上市別"}
-)
-
 # 新版介面資料與個股明細共用千元欄位；法人合計由三類買賣超相加。
 INTERFACE_CHART_REQUIRED_COLUMNS = STOCK_DETAIL_REQUIRED_COLUMNS + (
     "報酬率％",
@@ -433,59 +427,8 @@ def write_model1_cache_manifest(manifest: dict[str, Any]) -> None:
     )
 
 
-def read_stock_detail_frame() -> pd.DataFrame:
-    """讀取 StockDetail 專用資料，並統一股票代號與數值欄位。"""
-    global _stock_detail_frame_cache
-
-    signature = csv_file_signature(STOCK_DETAIL_FILE)
-    cached = _stock_detail_frame_cache
-    if cached and cached[0] == signature:
-        return cached[1]
-
-    with data_cache_lock:
-        # 另一個請求可能已經在鎖內完成相同檔案的讀取。
-        cached = _stock_detail_frame_cache
-        if cached and cached[0] == signature:
-            return cached[1]
-
-        frame = pd.read_csv(
-            STOCK_DETAIL_FILE,
-            encoding=STOCK_DETAIL_ENCODING,
-            dtype={"證券代碼": str},
-            thousands=",",
-        )
-        missing = [
-            column
-            for column in STOCK_DETAIL_REQUIRED_COLUMNS
-            if column not in frame.columns
-        ]
-        if missing:
-            raise ValueError(
-                f"{STOCK_DETAIL_FILE.name} 缺少欄位：{', '.join(missing)}"
-            )
-
-        raw_code = frame["證券代碼"].astype(str).str.strip()
-        frame["stock_id"] = raw_code.str.extract(r"^(\S+)", expand=False)
-        frame["stock_name"] = raw_code.str.replace(
-            r"^\S+\s*",
-            "",
-            regex=True,
-        )
-        frame["date"] = pd.to_datetime(frame["年月日"], errors="coerce")
-
-        for column in STOCK_DETAIL_NUMERIC_COLUMNS:
-            frame[column] = pd.to_numeric(
-                frame[column].astype(str).str.replace(",", "", regex=False),
-                errors="coerce",
-            )
-
-        frame = frame.dropna(subset=["stock_id", "date"])
-        _stock_detail_frame_cache = (signature, frame)
-        return frame
-
-
 def read_interface_chart_frame() -> pd.DataFrame:
-    """讀取介面圖表 CSV，統一股票代號、日期與數值欄位。"""
+    """讀取首頁、個股與市場強弱共用的行情 CSV。"""
     global _interface_chart_frame_cache
 
     signature = csv_file_signature(INTERFACE_CHART_FILE)
@@ -577,7 +520,7 @@ def build_stock_chart_data(
     limit: int = 90,
     source: str = INTERFACE_CHART_FILE.name,
 ) -> dict:
-    """把 StockDetail CSV 轉成個股三種圖表共用的時間序列。"""
+    """把共用行情 CSV 轉成個股三種圖表共用的時間序列。"""
     matched = frame[frame["stock_id"] == stock_id].sort_values("date").copy()
     if matched.empty:
         raise KeyError(stock_id)
@@ -655,11 +598,11 @@ def latest_market_snapshot() -> dict | None:
     """取得加權指數在行情檔中的最新一筆資料。
 
     模型輸出提供市場狀態與機率，但主頁摘要還需要目前指數的收盤與漲跌。
-    這些欄位來自同一份 StockDetail 行情檔；若檔案暫時不可用，不影響原本
+    這些欄位與個股圖表共用介面行情檔；若檔案暫時不可用，不影響原本
     /api/investment/latest 回傳模型結果。
     """
     try:
-        frame = read_stock_detail_frame()
+        frame = read_interface_chart_frame()
     except (
         FileNotFoundError,
         UnicodeDecodeError,
@@ -673,7 +616,25 @@ def latest_market_snapshot() -> dict | None:
     if matched.empty:
         return None
 
-    return build_stock_detail(matched.iloc[-1], STOCK_DETAIL_FILE.name)
+    return build_stock_detail(matched.iloc[-1], INTERFACE_CHART_FILE.name)
+
+
+def latest_market_display(market: dict) -> dict:
+    """Add display-only strength levels without changing model outputs."""
+    try:
+        frame = read_interface_chart_frame()
+    except (OSError, UnicodeDecodeError, pd.errors.ParserError, ValueError):
+        return build_market_display(market)
+
+    matched = frame.loc[
+        frame["stock_id"] == "Y9999",
+        ["date", "最高價(元)", "最低價(元)", "收盤價(元)"],
+    ].copy()
+    matched["date"] = matched["date"].dt.strftime("%Y-%m-%d")
+    points = matched.rename(columns={
+        "最高價(元)": "high", "最低價(元)": "low", "收盤價(元)": "close",
+    }).to_dict(orient="records")
+    return build_market_display(market, points)
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -1482,7 +1443,7 @@ def build_result(profile: dict | None = None) -> dict:
     return {
         "configuration_id": configuration.get("id"),
         "profile": profile,
-        "market": market or None,
+        "market": {**market, "display": latest_market_display(market)} if market else None,
         "market_snapshot": latest_market_snapshot(),
         "portfolio": portfolio_rows,
         "discussion": discussion,
@@ -1558,11 +1519,7 @@ def update_allow_fractional(setting: AllowFractionalUpdate) -> dict:
 def latest_stock_detail(stock_id: str) -> dict:
     """回傳指定股票在資料檔中的最新交易日行情。"""
     try:
-        frame = (
-            read_stock_detail_frame()
-            if normalize_asset_id(stock_id) == "Y9999"
-            else read_interface_chart_frame()
-        )
+        frame = read_interface_chart_frame()
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404,
@@ -1585,7 +1542,7 @@ def latest_stock_detail(stock_id: str) -> dict:
     return {
         "data": build_stock_detail(
             matched.iloc[-1],
-            STOCK_DETAIL_FILE.name if normalized_id == "Y9999" else INTERFACE_CHART_FILE.name,
+            INTERFACE_CHART_FILE.name,
         ),
     }
 
@@ -1594,11 +1551,7 @@ def latest_stock_detail(stock_id: str) -> dict:
 def latest_stock_charts(stock_id: str, limit: int = 90) -> dict:
     """回傳指定股票近期 K 線、法人與融資融券圖表資料。"""
     try:
-        frame = (
-            read_stock_detail_frame()
-            if normalize_asset_id(stock_id) == "Y9999"
-            else read_interface_chart_frame()
-        )
+        frame = read_interface_chart_frame()
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404,
@@ -1620,7 +1573,7 @@ def latest_stock_charts(stock_id: str, limit: int = 90) -> dict:
     return {
         "data": build_stock_chart_data(
             frame, normalized_id, limit,
-            STOCK_DETAIL_FILE.name if normalized_id == "Y9999" else INTERFACE_CHART_FILE.name,
+            INTERFACE_CHART_FILE.name,
         ),
     }
 

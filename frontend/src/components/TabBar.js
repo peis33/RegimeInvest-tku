@@ -24,6 +24,12 @@ const PILL_INSET = 1;
 const ICON_SIZE = 32;
 const TAB_LABELS = { Compare: '對比', Analyze: '各股', Home: '首頁', Setting: '設定' };
 
+// Bottom content padding lets the last rows scroll above the floating capsule.
+// Keep the scroll viewport full-height so earlier content shows behind it.
+export function getTabBarClearance(bottomInset) {
+  return BAR_HEIGHT + Math.max(bottomInset, 18) + 8 + 12;
+}
+
 export default function TabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets();
   const { width } = useViewportDimensions();

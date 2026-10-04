@@ -3,7 +3,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import {
   ActivityIndicator,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,7 +10,7 @@ import {
 } from 'react-native';
 import ChatHistory from './ChatHistory';
 import Text from '../components/MeetingText';
-import { meetingMessages, suggestionRows, shortNumber } from '../services/meetingSummary';
+import { meetingAgentDisplayText, meetingMessages, suggestionRows, shortNumber } from '../services/meetingSummary';
 import AssetSvg from '../components/AssetSvg';
 import { fetchLatestInvestment } from '../services/investmentApi';
 import { judgeAllocation } from '../services/judgeAllocation';
@@ -22,12 +21,12 @@ import { useAppSettings } from '../context/AppSettingsContext';
 import useViewportDimensions from '../hooks/useViewportDimensions';
 import { USE_MEETING_SNAPSHOT, meetingSnapshot } from '../data/meetingPreview';
 
-const AGENT_MEETING_IMAGE = require('../assets/image/AgentMeeting.mobile.png');
+const AGENT_MEETING_IMAGE = require('../assets/image/AgentMeeting.svg');
 const JUDGE_IMAGE = require('../assets/image/judge.svg');
 const RISK_SEEKING_IMAGE = require('../assets/image/risk-seeking.svg');
 const RISK_AVERSE_IMAGE = require('../assets/image/risk-averse.svg');
 const CHAT_JUDGE_IMAGE = require('../assets/image/Llama.svg');
-const CHAT_RISK_SEEKING_IMAGE = require('../assets/image/Qwen.svg');
+const CHAT_RISK_SEEKING_IMAGE = require('../assets/image/gemma.svg');
 const CHAT_RISK_AVERSE_IMAGE = require('../assets/image/Mistral.svg');
 const NOTICE_IMAGE = require('../assets/image/notice.svg');
 const CANCEL_IMAGE = require('../assets/image/cancel.svg');
@@ -399,6 +398,7 @@ function RoundChat({
           ) : messages.length > 0 ? (
             messages.map((message, index) => {
               const isRiskAverse = message.role === 'risk_averse';
+              const isRiskSeeking = message.role === 'risk_seeking';
               const isModerator = message.role === 'moderator';
               const isRight = isRiskAverse || message.role === 'risk_seeking';
               const bubbleStyle = isModerator
@@ -423,7 +423,7 @@ function RoundChat({
                   <AssetSvg
                     asset={avatarAsset}
                     width={(isModerator ? 52 : 48) * layoutScale}
-                    height={(isModerator ? 31 : 36) * layoutScale}
+                    height={(isRiskSeeking ? 48 : isModerator ? 31 : 36) * layoutScale}
                     pointerEvents="none"
                     accessibilityLabel={message.speaker || message.role}
                     style={[
@@ -487,7 +487,7 @@ function RoundChat({
                   },
                 ]}
               >
-                {error}
+                {meetingAgentDisplayText(error)}
               </Text>
             </View>
           ) : (
@@ -508,8 +508,8 @@ function RoundChat({
                 {discussionPending
                   ? (() => {
                     const p = discussionStatus?.progress;
-                    if (!p) return discussionStatus?.message || '正在準備背景 AI 討論…';
-                    const role = { risk_seeking: 'Qwen', risk_averse: 'Mistral', judge: 'Judge' }[p.role] || p.model || '模型';
+                    if (!p) return meetingAgentDisplayText(discussionStatus?.message || '正在準備背景 AI 討論…');
+                    const role = { risk_seeking: 'Gemma', risk_averse: 'Mistral', judge: 'Judge' }[p.role] || meetingAgentDisplayText(p.model) || '模型';
                     const stage = { preparing: '準備中', generating: '發言中', validating: '驗證中', call_failed: '呼叫失敗，檢查中' }[p.stage] || '處理中';
                     const elapsed = discussionStatus?.started_at ? Math.max(0, Math.floor((Date.now() - new Date(discussionStatus.started_at).getTime()) / 1000)) : Math.floor(p.elapsed_seconds || 0);
                     const check = p.role === 'judge' && p.judge_check ? `（配置檢查 ${p.judge_check}/${p.judge_check_total || 2}）` : '';
@@ -559,7 +559,7 @@ function RoundChat({
                     },
                   ]}
                 >
-                  {discussionError}
+                  {meetingAgentDisplayText(discussionError)}
                 </Text>
               ) : null}
             </View>
@@ -1054,11 +1054,12 @@ function MeetingProcess({ onBack, style }) {
               },
             ]}
           >
-            <Image
-              source={AGENT_MEETING_IMAGE}
-              resizeMode="contain"
+            <AssetSvg
+              asset={AGENT_MEETING_IMAGE}
+              width={agentMeetingWidth}
+              height={agentMeetingHeight}
               accessibilityLabel="AgentMeeting"
-              style={[styles.agentMeeting, { width: agentMeetingWidth, height: agentMeetingHeight }]}
+              style={styles.agentMeeting}
             />
           </View>
         </View>

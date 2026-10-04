@@ -3,8 +3,20 @@ import { judgeReasonText } from './judgeReasonText';
 const number = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null;
 export const shortNumber = (v) => Number(Number(v).toFixed(2)).toString();
 const cash = (id) => String(id).toUpperCase() === 'CASH';
+// Normalize display names in existing records without modifying saved model
+// decisions or the model identifier used to run the discussion.
+export function meetingAgentDisplayText(value) {
+  return String(value ?? '').replace(/\bqwen(?:\d+(?:\.\d+)*(?::[\w.-]+)?)?/gi, 'Gemma');
+}
+export function formatMeetingTextSpacing(value) {
+  return String(value ?? '')
+    .replace(/([\u3400-\u9fff])([A-Za-z0-9])/g, '$1 $2')
+    .replace(/([A-Za-z0-9%])([\u3400-\u9fff])/g, '$1 $2')
+    // Keep the date together: ADR2日 becomes ADR 2日.
+    .replace(/\b(ADR)\s*(\d{1,2})\s*日/gi, '$1 $2日');
+}
 function localizeMeetingText(value) {
-  return String(value || '')
+  return meetingAgentDisplayText(value)
     .replace(/引用(?:證據)?\s*ID\s*[:：]?\s*(?:[A-Z][A-Z0-9]*_\d+(?:_\d+)*)(?:\s*[,，、]\s*[A-Z][A-Z0-9]*_\d+(?:_\d+)*)*\s*[,，]?\s*/gi, '')
     .replace(/\b(?:REGIME|RISK|ER|SCORE)_\d+\s*[:：]\s*\d{4,6}\s*/g, '')
     .replace(/REGIME_\d+\s*[:：]\s*(?=市場狀態)/g, '')
@@ -427,7 +439,7 @@ export function meetingMessages(data) {
   const regime = {Bull:'偏多',Bear:'偏空',Sideways:'盤整'}[market.predicted_regime];
   const probability = number(market[`prob_${market.predicted_regime}`]);
   messages.push({id:'summary_intro',role:'moderator',type:'moderator',round:0,speaker:'主持人',text:
-    `我們先看看這次的投資配置。${regime ? `目前模型判斷市場較可能${regime}${probability === null ? '' : `，機率約為 ${Math.round(probability * 100)}%`}。` : ''}接下來請 Qwen 從報酬機會出發，Mistral 從風險控制出發，一起討論哪些股票值得調整、哪些適合保留。`});
+    `我們先看看這次的投資配置。${regime ? `目前模型判斷市場較可能${regime}${probability === null ? '' : `，機率約為 ${Math.round(probability * 100)}%`}。` : ''}接下來請 Gemma 從報酬機會出發，Mistral 從風險控制出發，一起討論哪些股票值得調整、哪些適合保留。`});
   for (const [key, d] of Object.entries(discussion.structured_decisions || {})) {
     const match = /^(risk_seeking|risk_averse)_round(\d+)$/.exec(key);
     if (!match) continue;
@@ -447,7 +459,7 @@ export function meetingMessages(data) {
       matches.forEach(id => inlineAgreements.add(id));
       const directionText = claimDirectionText(data, matches[0]);
       return directionText
-        ? `我認同 ${match[1] === 'risk_seeking' ? 'Mistral' : 'Qwen'} 提出的${directionText}。`
+        ? `我認同 ${match[1] === 'risk_seeking' ? 'Mistral' : 'Gemma'} 提出的${directionText}。`
         : '';
     };
     if (canCompare) {
@@ -477,7 +489,7 @@ export function meetingMessages(data) {
         lines.push(`${row.name}：${reason || '本輪維持原配置。'}`);
       }
     }
-    const opponent = match[1] === 'risk_seeking' ? 'Mistral' : 'Qwen';
+    const opponent = match[1] === 'risk_seeking' ? 'Mistral' : 'Gemma';
     const alreadySharedDirection = (id) => {
       const claim = discussion.claims?.[id];
       const old = previousRows.find(row => row.id === String(claim?.asset));
@@ -520,7 +532,7 @@ export function meetingMessages(data) {
         lines.push(`至於 ${opponent} 提到${parts.slice(0,3).join('、')}，${effectiveLabel}。`);
       }
     }
-    messages.push({id:key,role:match[1],type:'agent',round:Number(match[2]),speaker:match[1]==='risk_seeking'?'報酬觀點 · Qwen':'風險觀點 · Mistral',text:lines.join('\n\n')});
+    messages.push({id:key,role:match[1],type:'agent',round:Number(match[2]),speaker:match[1]==='risk_seeking'?'報酬觀點 · Gemma':'風險觀點 · Mistral',text:lines.join('\n\n')});
   }
   messages.sort((a,b)=>a.round-b.round || (a.role==='risk_seeking'?-1:1));
   const judge=discussion.structured_decisions?.judge;
@@ -614,7 +626,7 @@ export function meetingMessages(data) {
     } else if (changed.length) {
       for (const row of changed) {
         const choice=judge.choice_decisions?.[row.id];
-        if(choice) lines.push(`${row.name}：${choice.choice==='risk_seeking'?'採納 Qwen 的建議':choice.choice==='risk_averse'?'採納 Mistral 的建議':'維持原配置'}。`);
+        if(choice) lines.push(`${row.name}：${choice.choice==='risk_seeking'?'採納 Gemma 的建議':choice.choice==='risk_averse'?'採納 Mistral 的建議':'維持原配置'}。`);
         const note=evidenceNote(data,judge,row.id);if(note)lines.push(note);
         lines.push(`${actionText(row)}。`);
       }
@@ -631,5 +643,9 @@ export function meetingMessages(data) {
     lines.push('以上是會議提出的參考建議，原始配置尚未被直接改寫。');
     messages.push({id:'judge',role:'judge',type:'judge',round:(discussion.round_count||0)+1,speaker:'主持人 · 最終裁決',text:lines.join('\n\n')});
   }
-  return messages.map(message => ({...message, text: paragraphPunctuation(localizeMeetingText(message.text))}));
+  return messages.map(message => ({
+    ...message,
+    speaker: meetingAgentDisplayText(message.speaker),
+    text: formatMeetingTextSpacing(paragraphPunctuation(localizeMeetingText(message.text))),
+  }));
 }

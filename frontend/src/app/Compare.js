@@ -106,11 +106,20 @@ function formatPercent(value) {
 }
 
 function getPortfolioWeight(row) {
-  const rawWeight =
+  // Backend `*_percent` fields are already expressed as 0-100 percentages.
+  // Only fractional fields such as `final_weight` / `weight` use 0-1 values.
+  const rawPercentWeight =
     row?.final_weight_percent ??
     row?.finalWeightPercent ??
     row?.weight_percent ??
-    row?.weight;
+    row?.weightPercent;
+  const percentWeight = toNumber(rawPercentWeight);
+
+  if (percentWeight !== null) {
+    return percentWeight;
+  }
+
+  const rawWeight = row?.final_weight ?? row?.finalWeight ?? row?.weight;
   const weight = toNumber(rawWeight);
   if (weight === null) return null;
   return Math.abs(weight) <= 1 ? weight * 100 : weight;

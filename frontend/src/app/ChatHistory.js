@@ -9,13 +9,13 @@ import {
 } from 'react-native';
 import AssetSvg from '../components/AssetSvg';
 import Text from '../components/MeetingText';
-import { meetingMessages } from '../services/meetingSummary';
+import { formatMeetingTextSpacing, meetingAgentDisplayText, meetingMessages } from '../services/meetingSummary';
 import { fetchLatestInvestment } from '../services/investmentApi';
 import useViewportDimensions from '../hooks/useViewportDimensions';
 
 const CANCEL_IMAGE = require('../assets/image/cancel.svg');
 const JUDGE_IMAGE = require('../assets/image/Llama.svg');
-const RISK_SEEKING_IMAGE = require('../assets/image/Qwen.svg');
+const RISK_SEEKING_IMAGE = require('../assets/image/gemma.svg');
 const RISK_AVERSE_IMAGE = require('../assets/image/Mistral.svg');
 
 const DESIGN_WIDTH = 436;
@@ -49,7 +49,7 @@ function formatPercent(value) {
 }
 
 function cleanUserFacingText(value) {
-  return String(value || '')
+  const text = meetingAgentDisplayText(value)
     .replace(
       /(?:ER|CONC|RISK|SCORE|CASH|REGIME|DURATION|MTA|WEIGHT)_\d+(?=\s*[：:（(])/g,
       '',
@@ -63,6 +63,7 @@ function cleanUserFacingText(value) {
     .replace(/\b(?:RS|RA)\d+_C\d+\b/g, '')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
+  return formatMeetingTextSpacing(text);
 }
 
 function formatDecisionDetails(decision, decisionDisplay) {
@@ -315,7 +316,7 @@ function ChatHistory({ onBack, style, initialData }) {
         <AssetSvg
           asset={visual.asset}
           width={(isRight ? 47 : 44) * layoutScale}
-          height={(isRight ? 34 : 26) * layoutScale}
+          height={(message.role === 'risk_seeking' ? 47 : isRight ? 34 : 26) * layoutScale}
           accessibilityLabel={message.speaker || message.role}
           style={[
             styles.avatar,
@@ -449,7 +450,7 @@ function ChatHistory({ onBack, style, initialData }) {
               尚未取得會議紀錄
             </Text>
             <Text style={[styles.errorText, { fontSize: 13 * layoutScale }]}>
-              {error}
+              {meetingAgentDisplayText(error)}
             </Text>
           </View>
         ) : (
